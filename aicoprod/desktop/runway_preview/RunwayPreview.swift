@@ -186,9 +186,18 @@ enum Mode:String,CaseIterable { case steps="Track loop",song="Song loop",runway=
     }
     func setNote(step:Int,offsets:[Int],slide:Int?){
         guard (1...16).contains(step),offsets.allSatisfy({(-24...24).contains($0)}),slide.map({(-24...24).contains($0)}) ?? true else{return}
-        var hits=pattern
-        if offsets.isEmpty{hits.removeValue(forKey:step)}else{hits[step]=Hit(offsets:Array(Set(offsets)).sorted(),slide:slide)}
-        write(hits)
+        let hit:Hit?=offsets.isEmpty ? nil : Hit(offsets:Array(Set(offsets)).sorted(),slide:slide)
+        guard var p=project,let i=p.loops.firstIndex(where:{$0.id==loopID}) else{return}
+        if allBars {
+            // Keep each bar's existing variations while applying this single-step edit everywhere.
+            let prefix="\(track):"
+            var keys=Set(p.loops[i].patterns.keys.filter{$0.hasPrefix(prefix)})
+            keys.insert(prefix+"all")
+            for key in keys {var hits=p.loops[i].patterns[key] ?? [:];hits[step]=hit;p.loops[i].patterns[key]=hits}
+        } else {
+            var hits=p.loops[i].pattern(track,bar);hits[step]=hit;p.loops[i].patterns["\(track):\(bar)"]=hits
+        }
+        project=p
     }
     func tap(_ step:Int){
         selectedSteps=[step]
