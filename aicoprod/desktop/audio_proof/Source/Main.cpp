@@ -436,6 +436,15 @@ public:
         stopButton.onClick = [this] { requestStop(); };
         addAndMakeVisible (stopButton);
 
+        const auto runway = juce::File::getSpecialLocation (juce::File::userHomeDirectory)
+                                .getChildFile ("Applications/Lick-Lubin Runway.app");
+        openRunway.setButtonText ("Open Runway Studio");
+        openRunway.onClick = [this, runway] {
+            if (! runway.startAsProcess())
+                statusLabel.setText ("Build the Runway app with desktop/runway_preview/build.sh.", juce::dontSendNotification);
+        };
+        addAndMakeVisible (openRunway);
+
         commandServer = std::make_unique<CommandServer> ([this] (const juce::var& request)
         {
             auto reply = commandDispatcher.dispatch (request, [this] (const juce::var& command)
@@ -509,6 +518,8 @@ public:
         playButton.setBounds (buttons.removeFromLeft (130));
         buttons.removeFromLeft (12);
         stopButton.setBounds (buttons.removeFromLeft (130));
+        buttons.removeFromLeft (12);
+        openRunway.setBounds (buttons.removeFromLeft (170));
         area.removeFromTop (10);
         arrangementLabel.setBounds (area.removeFromTop (24));
         area.removeFromTop (6);
@@ -1153,7 +1164,7 @@ private:
 
     juce::AudioDeviceManager audioDeviceManager;
     juce::TextButton playButton;
-    juce::TextButton stopButton;
+    juce::TextButton stopButton, openRunway;
     juce::Label titleLabel;
     juce::Label sampleLabel;
     juce::Label catalogLabel;
