@@ -34,6 +34,14 @@ struct Project:Codable {
     var archiveID:UUID? = UUID()
     var name:String
     var loops:[BeatLoop] = [BeatLoop(id:1)]
+    // Sparse per-placement overrides. Missing entries inherit the loop; an empty pattern mutes it.
+    var runwayEdits:[Int:[Int:Hit]]?
+    func runwayPattern(_ track:Int,_ bar:Int,loop:BeatLoop?) -> [Int:Hit] {
+        runwayEdits?[(bar-1)*names.count+track] ?? loop?.pattern(track,(bar-1)%16+1) ?? [:]
+    }
+    mutating func resetRunwayEdits(slot:Int) {
+        runwayEdits=runwayEdits?.filter { $0.key / (16*names.count) != slot-1 }
+    }
     var slots:[Int?] = Array(repeating:nil,count:4)
     var mixes = Array(repeating:Mix(),count:names.count)
 }
@@ -188,14 +196,38 @@ enum Mode:String,CaseIterable { case steps="Track loop",song="Song loop",runway=
     func loopExists(_ id:Int)->Bool{ project?.loops.contains(where:{$0.id==id}) == true }
     @discardableResult func selectLoop(_ id:Int)->Bool{ guard loopExists(id) else{return false};loopID=id;selectedSteps=[];return true }
     func currentPlacement(slot:Int)->Int?{guard (1...4).contains(slot) else{return nil};return project?.slots[slot-1] ?? nil}
-    var writtenEnd:Int{project?.slots.lastIndex(where:{$0 != nil}).map{($0+1)*16} ?? 0}
+    var writtenBars:ClosedRange<Int>? {
+        guard let p=project else{return nil}
+        var bars=(p.runwayEdits ?? [:]).compactMap { $0.value.isEmpty ? nil : $0.key/names.count+1 }
+        for (i,id) in p.slots.enumerated() where id != nil {bars += [16*i+1,16*(i+1)]}
+        guard let first=bars.min(),let last=bars.max() else{return nil}
+        return first...last
+    }
+    func toggleRunway(track:Int,bar:Int) {
+        guard names.indices.contains(track),(1...64).contains(bar),var p=project else{return}
+        let local=(bar-1)%16+1, key=(bar-1)*names.count+track
+        let placed=p.slots[(bar-1)/16].flatMap{id in p.loops.first{$0.id==id}}
+        let base=placed?.pattern(track,local) ?? [:]
+        let enable=p.runwayPattern(track,bar,loop:placed).isEmpty
+        if enable == !base.isEmpty { p.runwayEdits?.removeValue(forKey:key) }
+        else {
+            var fill:[Int:Hit]=[:]
+            if enable {
+                fill=currentLoop?.pattern(track,local) ?? [:]
+                if fill.isEmpty {fill=Dictionary(uniqueKeysWithValues:seeds[track].map{($0,Hit())})}
+            }
+            if p.runwayEdits==nil {p.runwayEdits=[:]}
+            p.runwayEdits?[key]=fill
+        }
+        project=p
+    }
     func goHome(){stop();showHome=true}
     func setLoopPattern(_ steps:[Int]){let previous=allBars;allBars=true;setSteps(steps);allBars=previous}
     func placeLoop(_ id:Int,slot:Int){
         guard (1...4).contains(slot),var p=project,p.loops.contains(where:{$0.id==id}) else{return}
-        p.slots[slot-1]=id; project=p;message="Loop \(id) placed at bars \((slot-1)*16+1)–\(slot*16)."
+        p.resetRunwayEdits(slot:slot);p.slots[slot-1]=id; project=p;message="Loop \(id) placed at bars \((slot-1)*16+1)–\(slot*16)."
     }
-    func clearSlot(_ slot:Int) { guard var p=project,(1...4).contains(slot) else{return};p.slots[slot-1]=nil;project=p }
+    func clearSlot(_ slot:Int) { guard var p=project,(1...4).contains(slot) else{return};p.resetRunwayEdits(slot:slot);p.slots[slot-1]=nil;project=p }
     func setMix(_ mix:Mix){guard var p=project else{return};p.mixes[track]=mix;project=p;applyMix(track,mix)}
     private func applyMix(_ i:Int,_ m:Mix){audio.mix(track:names[i],gainDB:m.gainDB,rackOn:m.rackOn,rackMix:m.rackMix,delayMix:m.delayMix,reverbMix:m.reverbMix,cutItself:m.cutItself,sidechainFrom:m.sidechainFrom,hall:m.hall ?? true)}
     private func syncMix(){ for i in names.indices {applyMix(i,project?.mixes[i] ?? Mix())} }
@@ -251,8 +283,8 @@ enum Mode:String,CaseIterable { case steps="Track loop",song="Song loop",runway=
         for n in selectedSteps {setNote(step:n,offsets:offsets,slide:glide ? slidePitch:nil)}
     }
     func loopWritten(){
-        guard let slots=project?.slots,let first=slots.firstIndex(where:{$0 != nil}),let last=slots.lastIndex(where:{$0 != nil}) else{message="Place a loop on the runway first.";return}
-        rangeStart=first*16+1;rangeEnd=(last+1)*16;repeatRunway=true;start(.runway)
+        guard let bars=writtenBars else{message="Add a hit or place a loop on the runway first.";return}
+        rangeStart=bars.lowerBound;rangeEnd=bars.upperBound;repeatRunway=true;start(.runway)
     }
     func start(_ m:Mode){
         guard project != nil else{return}
@@ -279,7 +311,8 @@ enum Mode:String,CaseIterable { case steps="Track loop",song="Song loop",runway=
         if metro && (step-1)%4==0 {audio.click(accent:step==1)}
         let localBar=(playBar-1)%16+1
         for i in names.indices where mode != .steps || i==track {
-            if let hit=loop?.pattern(i,localBar)[step]{audio.hit(track:names[i],notes:hit.offsets,slideTo:hit.slide)}
+            let hits = mode == .runway ? p.runwayPattern(i,playBar,loop:loop) : loop?.pattern(i,localBar) ?? [:]
+            if let hit=hits[step]{audio.hit(track:names[i],notes:hit.offsets,slideTo:hit.slide)}
         }
     }
 }
@@ -368,18 +401,23 @@ struct PreviewScreen:View {
                 ForEach(0..<4,id:\.self){g in
                     VStack(spacing:2){HStack(spacing:1){ForEach(1...4,id:\.self){b in Text("\(slot*16+g*4+b)").font(.system(size:10,design:.monospaced)).frame(width:20,height:18)}}
                         ForEach(names.indices,id:\.self){t in HStack(spacing:1){ForEach(1...4,id:\.self){b in
-                            Rectangle().fill(loop?.hasTrack(t,g*4+b)==true ? mint.opacity(0.78):Color.white.opacity(g%2==0 ? 0.10:0.16))
-                                .frame(width:20,height:16)
-                                .overlay{ if s.running && s.mode == .runway && s.runningBar==slot*16+g*4+b{Rectangle().strokeBorder(Color.orange,lineWidth:2)} }
-                                .onTapGesture{
-                                    if let l=loop {s.selectLoop(l.id);s.selectTrack(t);s.bar=g*4+b;s.allBars=false}
-                                    else{s.placeLoop(s.loopID,slot:slot+1)}
-                                }
+                            runwayCell(track:t,bar:slot*16+g*4+b,loop:loop)
                         }}}
                     }
                 }
             }
         }
+    }
+    private func runwayCell(track:Int,bar:Int,loop:BeatLoop?) -> some View {
+        let enabled=s.project?.runwayPattern(track,bar,loop:loop).isEmpty == false
+        let background=Color.white.opacity(((bar-1)/4)%2==0 ? 0.10 : 0.16)
+        return Button { s.toggleRunway(track:track,bar:bar) } label: {
+            Rectangle().fill(enabled ? mint.opacity(0.78) : background).frame(width:20,height:16)
+                .overlay{if s.running && s.mode == .runway && s.runningBar==bar { Rectangle().strokeBorder(Color.orange,lineWidth:2) }}
+        }.buttonStyle(.plain)
+        .accessibilityLabel(names[track]+" bar "+String(bar))
+        .accessibilityValue(enabled ? "On" : "Off")
+        .contextMenu { if let loop {Button("Edit loop pattern"){s.selectLoop(loop.id);s.selectTrack(track);s.bar=(bar-1)%16+1;s.allBars=false}} }
     }
     var loopStrip:some View {
         VStack(alignment:.leading,spacing:7){

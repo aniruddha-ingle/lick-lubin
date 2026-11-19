@@ -89,8 +89,8 @@ extension PreviewStore {
         if s=="metronome on" || s=="metronome off" { metro=s.hasSuffix("on");return }
         if s=="play in song loop mode" || s=="loop this in song mode" || s=="loop song mode" {start(.song);return}
         if s=="loop the written part of the runway" {
-            guard writtenEnd>0 else {throw PhraseError("Place a loop on the runway first.")}
-            rangeStart=((project?.slots.firstIndex(where:{$0 != nil}) ?? 0)*16)+1;rangeEnd=writtenEnd;repeatRunway=true;start(.runway);return
+            guard writtenBars != nil else {throw PhraseError("Add a hit or place a loop on the runway first.")}
+            loopWritten();return
         }
         if let g=groups("(?:loop|play) (?:runway )?bars? ([0-9]+) (?:to|through) ([0-9]+)",s),
            let a=Int(g[0]),let b=Int(g[1]),(1...64).contains(a),(a...64).contains(b) {

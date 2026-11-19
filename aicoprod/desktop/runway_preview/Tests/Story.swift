@@ -67,6 +67,17 @@ import Foundation
         s.tap(6);precondition(s.pattern[6] != nil)
         s.selectHit(6);precondition(s.selectedSteps==[6] && s.pattern[6] != nil)
         s.tap(6);precondition(s.pattern[6]==nil && !s.selectedSteps.contains(6))
+        s.newProject()
+        s.toggleRunway(track:6,bar:63)
+        precondition(s.writtenBars == 63...63 && s.project!.runwayPattern(6,63,loop:nil).count==8)
+        s.toggleRunway(track:6,bar:63)
+        precondition(s.writtenBars == nil)
+        s.setLoopPattern([1,7]);s.placeLoop(1,slot:1);s.placeLoop(1,slot:2)
+        s.toggleRunway(track:6,bar:1)
+        let placed=s.currentLoop
+        precondition(s.project!.runwayPattern(6,1,loop:placed).isEmpty && s.project!.runwayPattern(6,17,loop:placed).count==2)
+        s.toggleRunway(track:6,bar:1)
+        precondition(s.project!.runwayPattern(6,1,loop:placed).count==2)
         let oldName=s.headline
         s.newProject()
         s.project?.name=oldName
