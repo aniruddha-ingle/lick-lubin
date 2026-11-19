@@ -35,7 +35,7 @@ private func positions(_ source:String, zeroBased:Bool, limit:Int = 16) throws -
     let terms = source.replacingOccurrences(of:" and ",with:",").replacingOccurrences(of:" ",with:"").split(separator:",")
     guard !terms.isEmpty else { throw PhraseError("Choose at least one position.") }
     return try terms.map {
-        guard let n=Int($0) else { throw PhraseError("Unrecognized position.") }
+        guard let n=Int($0), (0...limit).contains(n) else { throw PhraseError("Unrecognized position.") }
         let value = zeroBased ? n+1 : max(n,1)
         guard n>=0 && (1...limit).contains(value) else { throw PhraseError("Position outside the available range.") }
         return value
@@ -72,7 +72,7 @@ extension PreviewStore {
         if s=="play in song loop mode" || s=="loop this in song mode" || s=="loop song mode" {start(.song);return}
         if s=="loop the written part of the runway" {
             guard writtenEnd>0 else {throw PhraseError("Place a loop on the runway first.")}
-            rangeStart=1;rangeEnd=writtenEnd;repeatRunway=true;start(.runway);return
+            rangeStart=((project?.slots.firstIndex(where:{$0 != nil}) ?? 0)*16)+1;rangeEnd=writtenEnd;repeatRunway=true;start(.runway);return
         }
         if let g=groups("(?:loop|play) (?:runway )?bars? ([0-9]+) (?:to|through) ([0-9]+)",s),
            let a=Int(g[0]),let b=Int(g[1]),(1...64).contains(a),(a...64).contains(b) {
@@ -105,9 +105,19 @@ extension PreviewStore {
         if let g=groups("(?:play )?steps? ([0-9, and]+)",s){let hits=try positions(g[0],zeroBased:zero);setSteps(hits);selectedSteps=Set(hits);return}
         if let g=groups("(?:(?:can we |let's |lets )?go (?:back )?)?(up|down) ([0-9]+) (?:notes|steps|semitones)",s),let n=Int(g[1]),n<=48{
             guard !selectedSteps.isEmpty else {throw PhraseError("Select the notes to transpose.")}
-            let changes=selectedSteps.map{ ($0,pitches(step:$0).map{$0+(g[0]=="up" ? n : -n)}) }
-            guard changes.allSatisfy({!$0.1.isEmpty && $0.1.allSatisfy{abs($0)<=24}}) else {throw PhraseError("Transposition exceeds the sample range or a selected step is empty.")}
-            for (step,notes) in changes {setNote(step:step,offsets:notes,slide:nil)};return
+            let delta = g[0]=="up" ? n : -n
+            let changes=selectedSteps.map{ step in (step,pitches(step:step).map{$0+delta},pattern[step]?.slide.map{$0+delta}) }
+            guard changes.allSatisfy({!$0.1.isEmpty && $0.1.allSatisfy{abs($0)<=24} && abs($0.2 ?? 0)<=24}) else {throw PhraseError("Transposition exceeds the sample range or a selected step is empty.")}
+            let selection=selectedSteps;for (step,notes,slide) in changes {setNote(step:step,offsets:notes,slide:slide)};selectedSteps=selection;return
+        }
+        if let g=groups("(?:swap|replace) (.+) (?:for|with) (.+)",s),names.contains(where:{$0.lowercased()==g[0]}) {
+            let a=try trackIndex(g[0]), b=try trackIndex(g[1])
+            guard a != b,var p=project,let i=p.loops.firstIndex(where:{$0.id==loopID}) else {throw PhraseError("Choose two different tracks.")}
+            let entries=p.loops[i].patterns.filter{$0.key.hasPrefix("\(a):")}
+            guard !entries.isEmpty else {throw PhraseError("The source track is empty.")}
+            guard !p.loops[i].patterns.keys.contains(where:{$0.hasPrefix("\(b):")}) else {throw PhraseError("The destination track already has a pattern.")}
+            for (key,value) in entries {p.loops[i].patterns["\(b):"+key.split(separator:":")[1]]=value;p.loops[i].patterns.removeValue(forKey:key)}
+            project=p;selectTrack(b);return
         }
         if ["duplicate loop","create a new loop by duplicating what we have so far","duplicate this loop"].contains(s){duplicateLoop();return}
         if let g=groups("(?:edit runway to )?replace loop ?([0-9]+) on (?:slots|bars) ([0-9, and]+) with loop ?([0-9]+)",s),
@@ -122,17 +132,28 @@ extension PreviewStore {
         }
         if let g=groups("(?:sidechain|side chain) (.+) to (.+)",s){
             let a=try trackIndex(g[0]),b=try trackIndex(g[1]);guard a != b else {throw PhraseError("Choose two different tracks.")}
-            selectTrack(b);var mix=currentMix;mix.sidechainFrom=names[a];setMix(mix);return
+            updateMix(b){$0.sidechainFrom=names[a]};return
+        }
+        if let g=groups("(add echo to|remove echo from|put) (.+?)( in a big room)?",s),g[0] != "put" || !g[2].isEmpty {
+            let i=try trackIndex(g[1]);updateMix(i) { if g[0]=="put" {$0.reverbMix=0.5} else {$0.delayMix=g[0]=="add echo to" ? 0.3 : 0} };return
+        }
+        if let g=groups("(?:set )?(rack|echo|reverb) (?:mix|amount) (?:on|for) (.+) to ([0-9]+)(?: percent|%)",s),
+           let amount=Int(g[2]),(0...100).contains(amount){
+            let i=try trackIndex(g[1]);updateMix(i){m in let v=Double(amount)/100;switch g[0]{case "rack":m.rackMix=v;case "echo":m.delayMix=v;default:m.reverbMix=v}};return
         }
         if let g=groups("(?:set )?(.+) gain (?:to )?(-?[0-9]+) (?:db|decibels)",s),let db=Double(g[1]),(-60...12).contains(db){
-            selectTrack(try trackIndex(g[0]));var mix=currentMix;mix.gainDB=db;setMix(mix);return
+            updateMix(try trackIndex(g[0])){$0.gainDB=db};return
         }
         if let g=groups("(rack|cut itself|echo|reverb) (on|off) for (.+)",s){
-            selectTrack(try trackIndex(g[2]));let on=g[1]=="on";var mix=currentMix
+            let i=try trackIndex(g[2]);let on=g[1]=="on";updateMix(i){mix in
             switch g[0]{case "rack":mix.rackOn=on;case "cut itself":mix.cutItself=on;case "echo":mix.delayMix=on ? 0.3 : 0;default:mix.reverbMix=on ? 0.25 : 0}
-            setMix(mix);return
+            };return
         }
         throw PhraseError("Try “play Closed on every eighth note” or “loop this in song mode”.")
+    }
+    private func updateMix(_ i:Int, _ edit:(inout Mix)->Void) {
+        let prior=track
+        track=i;var m=currentMix;edit(&m);setMix(m);track=prior
     }
     func dictate() {
         guard let helper=Bundle.main.url(forResource:"orchid-dictate",withExtension:nil) else {message="Microphone helper is missing.";return}
