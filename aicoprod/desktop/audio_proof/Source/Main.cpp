@@ -32,8 +32,9 @@ constexpr double stopReleaseSeconds = 0.012;
 constexpr double retriggerReleaseSeconds = 0.010;
 constexpr float voiceGain = 0.25f;
 constexpr float sidechainDepth = 0.55f;
-constexpr int voicesPerTrack = 8;
+constexpr int voicesPerTrack = 32;
 constexpr int cleanTrack = 2;
+constexpr auto arrangementInstructions = "Click cells to place clips. Edit the selected track's steps below.";
 static_assert (std::atomic<bool>::is_always_lock_free && std::atomic<int>::is_always_lock_free,
                "Audio/UI state must use lock-free atomics.");
 
@@ -223,6 +224,12 @@ struct Voice
     }
 };
 
+struct TrackVoices
+{
+    std::array<Voice, voicesPerTrack> voices;
+    size_t active = 0;
+};
+
 struct TrackSettings
 {
     bool cutItself = true;
@@ -260,6 +267,15 @@ public:
         if (playheadBar != bar)
         {
             playheadBar = bar;
+            repaint();
+        }
+    }
+
+    void setFocusedTrack (int track)
+    {
+        if (focusedTrack != track)
+        {
+            focusedTrack = track;
             repaint();
         }
     }
@@ -304,7 +320,8 @@ public:
         for (int track = 0; track < licklubin::ArrangementModel::trackCount; ++track)
         {
             const auto row = bounds.removeFromTop (trackHeight);
-            graphics.setColour (juce::Colours::lightgrey);
+            graphics.setColour (track == focusedTrack ? juce::Colour::fromRGB (135, 215, 227)
+                                                       : juce::Colours::lightgrey);
             graphics.drawText (licklubin::ArrangementModel::tracks[static_cast<size_t> (track)].alias,
                                0, row.getY(), labelWidth - 8, row.getHeight(),
                                juce::Justification::centredRight, false);
@@ -330,20 +347,30 @@ public:
         constexpr int labelWidth = 145;
         constexpr int headerHeight = 48;
         constexpr int trackHeight = 25;
-        if (event.x < labelWidth || event.y < headerHeight)
+        if (event.y < headerHeight || onCellClicked == nullptr)
             return;
+
+        const auto track = (event.y - headerHeight) / trackHeight;
+        if (track >= ArrangementModel::trackCount)
+            return;
+
+        if (event.x < labelWidth)
+        {
+            onCellClicked (track, -1);
+            return;
+        }
 
         const auto cellWidth = static_cast<float> (juce::jmax (1, getWidth() - labelWidth))
                              / licklubin::ArrangementModel::barCount;
-        const auto track = (event.y - headerHeight) / trackHeight;
         const auto bar = static_cast<int> ((event.x - labelWidth) / cellWidth);
-        if (onCellClicked != nullptr && ArrangementModel::isValidCell (track, bar))
+        if (ArrangementModel::isValidCell (track, bar))
             onCellClicked (track, bar);
     }
 
 private:
     licklubin::ArrangementModel& model;
     int playheadBar = -1;
+    int focusedTrack = -1;
 };
 
 class MainComponent final : public juce::Component,
@@ -372,17 +399,28 @@ public:
 
         arrangementLabel.setColour (juce::Label::textColourId, juce::Colours::lightgrey);
         arrangementLabel.setMinimumHorizontalScale (0.75f);
-        arrangementLabel.setText ("Click a cell to play its sample on each beat of that bar.",
-                                  juce::dontSendNotification);
+        arrangementLabel.setText (arrangementInstructions, juce::dontSendNotification);
         addAndMakeVisible (arrangementLabel);
 
-        arrangementModel.toggleClip (cleanTrack, 0);
+        for (int bar = 0; bar < 4; ++bar)
+        {
+            arrangementModel.toggleClip (cleanTrack, bar);
+            arrangementModel.toggleClip (6, bar); // Closed hi-hat
+            arrangementModel.toggleClip (9, bar); // Pop clap
+            if (bar > 0)
+                arrangementModel.toggleClip (1, bar); // Heavyweight
+        }
+        arrangementModel.toggleClip (5, 3); // Recorded Roll fill
         arrangementGrid = std::make_unique<ArrangementGridComponent> (arrangementModel);
         arrangementGrid->onCellClicked = [this] (int track, int bar)
         {
-            setArrangementCell (track, bar, ! arrangementModel.hasClip (track, bar), true);
+            trackSelector.setSelectedId (track + 1, juce::dontSendNotification);
+            refreshSelectedTrack();
+            if (bar >= 0)
+                setArrangementCell (track, bar, ! arrangementModel.hasClip (track, bar), true);
         };
         addAndMakeVisible (*arrangementGrid);
+        initialisePatternControls();
         initialiseTrackControls();
 
         statusLabel.setJustificationType (juce::Justification::centredLeft);
@@ -464,7 +502,7 @@ public:
         catalogLabel.setBounds (area.removeFromTop (25));
         motifLabel.setBounds (area.removeFromTop (25));
         area.removeFromTop (8);
-        statusLabel.setBounds (area.removeFromTop (90));
+        statusLabel.setBounds (area.removeFromTop (43));
         area.removeFromTop (8);
 
         auto buttons = area.removeFromTop (44);
@@ -475,6 +513,18 @@ public:
         arrangementLabel.setBounds (area.removeFromTop (24));
         area.removeFromTop (6);
         arrangementGrid->setBounds (area.removeFromTop (298));
+        area.removeFromTop (8);
+        auto pattern = area.removeFromTop (28);
+        patternLabel.setBounds (pattern.removeFromLeft (145));
+        constexpr int groupGap = 8;
+        const auto stepWidth = juce::jmax (1, (pattern.getWidth() - 3 * groupGap)
+                                              / ArrangementModel::stepsPerBar);
+        for (int step = 0; step < ArrangementModel::stepsPerBar; ++step)
+        {
+            if (step > 0 && step % ArrangementTransport::stepsPerBeat == 0)
+                pattern.removeFromLeft (groupGap);
+            stepButtons[static_cast<size_t> (step)].setBounds (pattern.removeFromLeft (stepWidth).reduced (1, 0));
+        }
         area.removeFromTop (12);
         auto controls = area.removeFromTop (29);
         trackEffectsLabel.setBounds (controls.removeFromLeft (105));
@@ -484,10 +534,32 @@ public:
         echoButton.setBounds (controls.removeFromLeft (84));
         reverbSelector.setBounds (controls.removeFromLeft (130));
         controls.removeFromLeft (12);
-        sidechainSelector.setBounds (controls.removeFromLeft (220));
+        sidechainSelector.setBounds (controls);
     }
 
 private:
+    void initialisePatternControls()
+    {
+        addAndMakeVisible (patternLabel);
+        for (int step = 0; step < ArrangementModel::stepsPerBar; ++step)
+        {
+            auto& button = stepButtons[static_cast<size_t> (step)];
+            const auto number = juce::String (step + 1);
+            button.setButtonText (number);
+            button.setTitle ("Step " + number);
+            button.setClickingTogglesState (true);
+            button.setColour (juce::TextButton::buttonOnColourId, juce::Colour::fromRGB (104, 178, 141));
+            button.setColour (juce::TextButton::textColourOnId, juce::Colour::fromRGB (24, 27, 33));
+            button.onClick = [this, step]
+            {
+                const auto track = static_cast<int> (selectedTrack());
+                if (setPatternStep (track, step, ! arrangementModel.hasStep (track, step), true).isNotEmpty())
+                    refreshPatternControls();
+            };
+            addAndMakeVisible (button);
+        }
+    }
+
     void initialiseTrackControls()
     {
         trackEffectsLabel.setText ("Track effects", juce::dontSendNotification);
@@ -502,12 +574,12 @@ private:
             const auto index = static_cast<size_t> (track);
             const auto alias = juce::String (ArrangementModel::tracks[index].alias);
             trackSelector.addItem (alias, track + 1);
-            sidechainSelector.addItem ("Duck on " + alias, track + 2);
+            sidechainSelector.addItem (alias, track + 2);
             pendingSettings[index].store (trackSettings[index].packed(), std::memory_order_relaxed);
         }
 
         trackSelector.setSelectedId (cleanTrack + 1, juce::dontSendNotification);
-        trackSelector.onChange = [this] { refreshTrackControls(); };
+        trackSelector.onChange = [this] { refreshSelectedTrack(); };
         cutButton.onClick = [this]
         {
             const auto track = selectedTrack();
@@ -542,12 +614,29 @@ private:
         addAndMakeVisible (echoButton);
         addAndMakeVisible (reverbSelector);
         addAndMakeVisible (sidechainSelector);
-        refreshTrackControls();
+        refreshSelectedTrack();
     }
 
     size_t selectedTrack() const noexcept
     {
         return static_cast<size_t> (trackSelector.getSelectedId() - 1);
+    }
+
+    void refreshSelectedTrack()
+    {
+        arrangementGrid->setFocusedTrack (static_cast<int> (selectedTrack()));
+        refreshTrackControls();
+        refreshPatternControls();
+    }
+
+    void refreshPatternControls()
+    {
+        const auto track = selectedTrack();
+        patternLabel.setText (juce::String (ArrangementModel::tracks[track].alias) + " steps",
+                              juce::dontSendNotification);
+        for (int step = 0; step < ArrangementModel::stepsPerBar; ++step)
+            stepButtons[static_cast<size_t> (step)].setToggleState (
+                arrangementModel.hasStep (static_cast<int> (track), step), juce::dontSendNotification);
     }
 
     void refreshTrackControls()
@@ -557,8 +646,15 @@ private:
         cutButton.setToggleState (settings.cutItself, juce::dontSendNotification);
         echoButton.setToggleState (settings.echo, juce::dontSendNotification);
         reverbSelector.setSelectedId (static_cast<int> (settings.reverb) + 1, juce::dontSendNotification);
+        const auto target = juce::String (ArrangementModel::tracks[selected].alias);
+        sidechainSelector.changeItemText (1, "No ducking on " + target);
         for (int track = 0; track < ArrangementModel::trackCount; ++track)
-            sidechainSelector.setItemEnabled (track + 2, static_cast<size_t> (track) != selected);
+        {
+            const auto index = static_cast<size_t> (track);
+            sidechainSelector.changeItemText (track + 2, juce::String (ArrangementModel::tracks[index].alias)
+                                                         + " ducks " + target);
+            sidechainSelector.setItemEnabled (track + 2, index != selected);
+        }
         sidechainSelector.setSelectedId (settings.sidechainSource + 2, juce::dontSendNotification);
     }
 
@@ -631,6 +727,23 @@ private:
         return {};
     }
 
+    juce::String setPatternStep (int track, int step, bool enabled, bool local)
+    {
+        if (! ArrangementModel::isValidStep (track, step))
+            return "Invalid pattern step.";
+        if (playbackActive())
+            return "Stop playback to edit steps.";
+        if (arrangementModel.hasStep (track, step) == enabled)
+            return {};
+
+        arrangementModel.setStep (track, step, enabled);
+        if (local)
+            commandDispatcher.localEdit();
+        if (static_cast<size_t> (track) == selectedTrack())
+            refreshPatternControls();
+        return {};
+    }
+
     static int findTrack (const juce::String& id)
     {
         for (int track = 0; track < ArrangementModel::trackCount; ++track)
@@ -671,6 +784,8 @@ private:
             return "Unknown arrangement track.";
         if (op == "set_cell")
             return setArrangementCell (track, static_cast<int> (command["bar"]) - 1, enabled, false);
+        if (op == "set_step")
+            return setPatternStep (track, static_cast<int> (command["step"]) - 1, enabled, false);
 
         const auto index = static_cast<size_t> (track);
         auto settings = trackSettings[index];
@@ -849,11 +964,10 @@ private:
             {
                 float trackLeft = 0.0f;
                 float trackRight = 0.0f;
-                for (auto& voice : voices[track])
+                auto& trackVoices = voices[track];
+                for (size_t index = 0; index < trackVoices.active;)
                 {
-                    if (voice.sample == nullptr)
-                        continue;
-
+                    auto& voice = trackVoices.voices[index];
                     const auto& buffer = voice.sample->buffer;
                     const auto sampleLength = buffer.getNumSamples();
                     const auto sourceIndex = static_cast<int> (voice.sourcePosition);
@@ -871,7 +985,9 @@ private:
                     trackRight += right * gain;
                     voice.sourcePosition += voice.sourceStep;
                     if (voice.sourcePosition >= sampleLength || voice.releaseRamp.finished())
-                        voice.sample = nullptr;
+                        voice = trackVoices.voices[--trackVoices.active];
+                    else
+                        ++index;
                 }
                 trackEffects[track].process (trackLeft, trackRight);
                 mixedLeft += trackLeft;
@@ -936,21 +1052,15 @@ private:
 
         const auto index = static_cast<size_t> (track);
         auto& trackVoices = voices[index];
-        auto available = std::find_if (trackVoices.begin(), trackVoices.end(),
-                                      [] (const Voice& voice) { return voice.sample == nullptr; });
         if (audioTrackSettings[index].cutItself)
-        {
-            const auto frames = releaseFrames (retriggerReleaseSeconds);
-            for (auto& voice : trackVoices)
-                voice.release (frames);
-        }
-        if (available == trackVoices.end())
+            releaseTrackVoices (trackVoices, releaseFrames (retriggerReleaseSeconds));
+        if (trackVoices.active == trackVoices.voices.size())
         {
             voiceLimitReached.store (true, std::memory_order_release);
             return false;
         }
 
-        *available = { sample, 0.0, sample->sourceSampleRate / deviceSampleRate, {} };
+        trackVoices.voices[trackVoices.active++] = { sample, 0.0, sample->sourceSampleRate / deviceSampleRate, {} };
         return true;
     }
 
@@ -963,8 +1073,13 @@ private:
     {
         const auto frames = releaseFrames (stopReleaseSeconds);
         for (auto& trackVoices : voices)
-            for (auto& voice : trackVoices)
-                voice.release (frames);
+            releaseTrackVoices (trackVoices, frames);
+    }
+
+    static void releaseTrackVoices (TrackVoices& track, int frames) noexcept
+    {
+        for (size_t index = 0; index < track.active; ++index)
+            track.voices[index].release (frames);
     }
 
     void timerCallback() override
@@ -988,12 +1103,14 @@ private:
                                && ! isCurrentlyPlaying && ! playPending);
         stopButton.setEnabled (isCurrentlyPlaying || playPending);
         arrangementGrid->setPlayheadBar (bar);
-        if (isCurrentlyPlaying || playPending)
-            arrangementLabel.setText ("Stop playback to edit clips.", juce::dontSendNotification);
+        const auto editingAllowed = ! isCurrentlyPlaying && ! playPending;
+        for (auto& button : stepButtons)
+            button.setEnabled (editingAllowed);
+        if (! editingAllowed)
+            arrangementLabel.setText ("Stop playback to edit clips and steps.", juce::dontSendNotification);
         else if (wasPlaying)
-            arrangementLabel.setText ("Click a cell to play its sample on each beat of that bar.",
-                                      juce::dontSendNotification);
-        wasPlaying = isCurrentlyPlaying || playPending;
+            arrangementLabel.setText (arrangementInstructions, juce::dontSendNotification);
+        wasPlaying = ! editingAllowed;
 
         juce::String status = loadingFinished ? sampleLoadStatus : "Loading Orchid samples and New Flow MIDI...";
         if (! loadingFinished)
@@ -1025,7 +1142,7 @@ private:
         }
 
         if (overflowed)
-            status += " Voice limit reached; one beat was skipped.";
+            status += " Voice limit reached; a sample trigger was skipped.";
         if (commandServerUnavailable)
             status += " Local voice control is unavailable.";
 
@@ -1043,6 +1160,8 @@ private:
     juce::Label motifLabel;
     juce::Label statusLabel;
     juce::Label arrangementLabel;
+    juce::Label patternLabel;
+    std::array<juce::TextButton, ArrangementModel::stepsPerBar> stepButtons;
     juce::Label trackEffectsLabel;
     juce::ComboBox trackSelector;
     juce::ToggleButton cutButton;
@@ -1067,7 +1186,7 @@ private:
     juce::String deviceInitialisationError;
     Motif motif;
 
-    std::array<std::array<Voice, voicesPerTrack>, ArrangementModel::trackCount> voices {};
+    std::array<TrackVoices, ArrangementModel::trackCount> voices {};
     std::array<TrackEffects, ArrangementModel::trackCount> trackEffects;
     std::array<TrackSettings, ArrangementModel::trackCount> trackSettings;
     std::array<std::atomic<int>, ArrangementModel::trackCount> pendingSettings;
@@ -1099,6 +1218,7 @@ public:
     {
         setUsingNativeTitleBar (true);
         setResizable (true, true);
+        setResizeLimits (850, 680, 2560, 1600);
         setContentOwned (new MainComponent(), true);
         centreWithSize (1100, 700);
         setVisible (true);

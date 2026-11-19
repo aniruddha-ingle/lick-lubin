@@ -67,6 +67,33 @@ void invalidEditsAreRejectedWithoutPartialMutation()
              "bar past final column must be rejected");
     require (sameCells (beforeInvalidEdits, model), "out-of-range bar edit must remain atomic");
 }
+
+void stepEditsAreSharedAcrossClipsButIsolatedByTrack()
+{
+    using Model = licklubin::ArrangementModel;
+    Model model;
+    require (model.toggleClip (2, 0) && model.toggleClip (2, 5), "place two Clean clips");
+    require (! model.hasStep (2, 15), "step sixteen starts disabled on Clean");
+    require (model.setStep (2, 15, true) && model.hasStep (2, 15),
+             "step sixteen can be enabled");
+    require (model.hasClip (2, 0) && model.hasClip (2, 5),
+             "editing a shared pattern must preserve both clip placements");
+    require (! model.hasStep (3, 15), "editing Clean must preserve Dancehall's pattern");
+
+    const auto beforeInvalidEdits = model;
+    require (! model.setStep (-1, 15, false) && ! model.setStep (Model::trackCount, 15, true)
+             && ! model.setStep (2, -1, true) && ! model.setStep (2, Model::stepsPerBar, true),
+             "reject invalid step edits");
+    for (int track = 0; track < Model::trackCount; ++track)
+        for (int step = 0; step < Model::stepsPerBar; ++step)
+            require (model.hasStep (track, step) == beforeInvalidEdits.hasStep (track, step),
+                     "invalid step edits must leave the whole pattern intact");
+
+    require (model.setStep (2, 15, false) && ! model.hasStep (2, 15),
+             "step sixteen can be disabled again");
+    require (model.toggleClip (2, 0) && model.hasStep (2, 0),
+             "removing a clip must preserve the track pattern");
+}
 }
 
 int main()
@@ -76,6 +103,7 @@ int main()
         sectionBoundsAreFixedToSixteenBars();
         validCellCanBeTurnedOnAndOff();
         invalidEditsAreRejectedWithoutPartialMutation();
+        stepEditsAreSharedAcrossClipsButIsolatedByTrack();
     }
     catch (const std::exception& error)
     {
