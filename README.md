@@ -4,6 +4,10 @@ Lick-Lubin is a voice-controlled, sample-based music co-producer with a small st
 
 The working musical target is **102 BPM, F minor**. The selected library is the user's curated **Cymatics Orchid Sample Pack**. Keep that pack outside the repository and configure its location locally; do not commit sample files.
 
+## Runway Studio
+
+The native Mac preview adds projects, 16-bar loops, a 64-bar runway, live pitched step editing and a project mixer. [Build and rehearse the demo](aicoprod/desktop/runway_preview/README.md).
+
 ## Current status
 
 The standalone Mac app plays a programmable 16-bar grid at 102 BPM. Each active bar plays the selected track’s 16-step rhythm. Click a track and edit its sixteenth notes while stopped. Steps 1, 5, 9, and 13 are the four beat starts. During playback you can change Cut Itself, kick-triggered ducking, eighth-note echo, and room or hall reverb.

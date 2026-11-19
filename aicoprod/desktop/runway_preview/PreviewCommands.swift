@@ -111,6 +111,10 @@ extension PreviewStore {
             guard offsets.allSatisfy({abs($0)<=24}) else {throw PhraseError("Chord exceeds this sample's pitch range.")}
             setNote(step:step,offsets:offsets,slide:nil);selectedSteps=[step];return
         }
+        if let g=groups("(put|remove) (.+?) (?:on|from) step ([0-9]+)",s) {
+            let i=try trackIndex(g[1]), step=try positions(g[2],zeroBased:zero)[0]
+            selectTrack(i);setNote(step:step,offsets:g[0]=="put" ? (pattern[step]?.offsets ?? [0]) : [],slide:g[0]=="put" ? pattern[step]?.slide : nil);selectedSteps=[step];return
+        }
         if let g=groups("(?:play )?steps? ([0-9, and]+)",s){let hits=try positions(g[0],zeroBased:zero);setSteps(hits);selectedSteps=Set(hits);return}
         if let g=groups("(?:(?:can we |let's |lets )?go (?:back )?)?(up|down) ([0-9]+) (?:notes|steps|semitones)",s),let n=Int(g[1]),n<=48{
             guard !selectedSteps.isEmpty else {throw PhraseError("Select the notes to transpose.")}
@@ -139,9 +143,9 @@ extension PreviewStore {
             let slots=try positions(g[1],zeroBased:false,limit:4);guard loopExists(id) else {throw PhraseError("Unknown loop.")}
             for slot in slots{placeLoop(id,slot:slot)};return
         }
-        if let g=groups("(?:sidechain|side chain) (.+) to (.+)",s){
-            let a=try trackIndex(g[0]),b=try trackIndex(g[1]);guard a != b else {throw PhraseError("Choose two different tracks.")}
-            updateMix(b){$0.sidechainFrom=names[a]};return
+        if let g=groups("(remove )?(?:sidechain|side chain) (.+) to (.+)",s){
+            let a=try trackIndex(g[1]),b=try trackIndex(g[2]);guard a != b else {throw PhraseError("Choose two different tracks.")}
+            updateMix(b){if g[0].isEmpty {$0.sidechainFrom=names[a]} else if $0.sidechainFrom==names[a] {$0.sidechainFrom=nil}};return
         }
         if let g=groups("(add echo to|remove echo from|put) (.+?)( in a big room)?",s),g[0] != "put" || !g[2].isEmpty {
             let i=try trackIndex(g[1]);updateMix(i) { if g[0]=="put" {$0.reverbMix=0.5;$0.hall=true} else {$0.delayMix=g[0]=="add echo to" ? 0.3 : 0} };return
@@ -150,7 +154,7 @@ extension PreviewStore {
            let amount=Int(g[2]),(0...100).contains(amount){
             let i=try trackIndex(g[1]);updateMix(i){m in let v=Double(amount)/100;switch g[0]{case "rack":m.rackMix=v;case "echo":m.delayMix=v;default:m.reverbMix=v}};return
         }
-        if let g=groups("(?:set )?(.+) gain (?:to )?(-?[0-9]+) (?:db|decibels)",s),let db=Double(g[1]),(-60...12).contains(db){
+        if let g=groups("(?:set )?(.+) gain (?:to )?(-?[0-9]+) (?:db|decibels)",s),let db=Double(g[1]),(-48...6).contains(db){
             updateMix(try trackIndex(g[0])){$0.gainDB=db};return
         }
         if let g=groups("(room|hall) reverb on for (.+)",s){
