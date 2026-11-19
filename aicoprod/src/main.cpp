@@ -117,7 +117,7 @@ static void enter_speaker_mode() {
     M5.Speaker.setVolume(210);
     is_recording = false;
     ui_dirty = true;
-    send_ui_event("ptt_stop");
+    send_ui_event("ptt_release");
 }
 
 static void render_ui() {
@@ -313,7 +313,7 @@ static void handle_touch() {
             force_acoustic_cutoff();
         }
         ui_dirty = true;
-        send_ui_event("toggle_talkback");
+        send_ui_event("toggle_silent");
         return;
     }
 

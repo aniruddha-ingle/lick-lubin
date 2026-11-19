@@ -1,3 +1,4 @@
+import base64
 import json
 import pytest
 
@@ -35,17 +36,26 @@ def test_scenario_1_1_mic_pcm_960_byte_encode_decode() -> None:
 @pytest.mark.asyncio
 async def test_scenario_1_2_ptt_start_audio_and_release_commit(bridge, fake_realtime) -> None:
     """Scenario 1.2: ptt_start enables mic capture, forwards PCM audio, and ptt_release commits + creates response."""
-    ptt_start = encode_ltv_frame(MSG_JSON_UI, json.dumps({"event": "ptt_start", "speak_back": True}).encode("utf-8"))
+    ptt_start = encode_ltv_frame(
+        MSG_JSON_UI,
+        json.dumps({"event": "ptt_start", "ptt": True, "speak_back": True}).encode("utf-8"),
+    )
     await bridge.handle_serial_bytes(ptt_start)
 
     assert bridge.state.ptt_active is True
     assert bridge.state.speak_back is True
 
-    pcm_chunk = bytes(960)
-    await bridge.handle_serial_bytes(encode_ltv_frame(MSG_MIC_PCM, pcm_chunk))
-    assert len(fake_realtime.input_audio_buffer.appended_b64) == 1
+    pcm_chunks = [bytes([index]) * 960 for index in (1, 2)]
+    for pcm_chunk in pcm_chunks:
+        await bridge.handle_serial_bytes(encode_ltv_frame(MSG_MIC_PCM, pcm_chunk))
+    assert fake_realtime.input_audio_buffer.appended_b64 == [
+        base64.b64encode(chunk).decode("ascii") for chunk in pcm_chunks
+    ]
 
-    ptt_release = encode_ltv_frame(MSG_JSON_UI, json.dumps({"event": "ptt_release"}).encode("utf-8"))
+    ptt_release = encode_ltv_frame(
+        MSG_JSON_UI,
+        json.dumps({"event": "ptt_release", "ptt": False, "speak_back": True}).encode("utf-8"),
+    )
     await bridge.handle_serial_bytes(ptt_release)
 
     assert bridge.state.ptt_active is False
