@@ -229,9 +229,21 @@ enum Mode:String,CaseIterable { case steps="Track loop",song="Song loop",runway=
         project=p
     }
     func tap(_ step:Int){
+        if pattern[step] != nil {
+            setNote(step:step,offsets:[],slide:nil)
+            selectedSteps.remove(step)
+        } else {
+            setNote(step:step,offsets:[0],slide:nil)
+            selectHit(step)
+        }
+    }
+    func selectHit(_ step:Int){
+        guard let hit=pattern[step] else{return}
         selectedSteps=[step]
-        if let h=pattern[step]{editingPitch=h.offsets.first ?? 0;glide=h.slide != nil;slidePitch=h.slide ?? min(24,editingPitch+12);chord=h.offsets.count>1 ? (h.offsets[1]-editingPitch==3 ? "Minor":"Major") : "Single"}
-        else {setNote(step:step,offsets:[0],slide:nil);editingPitch=0;glide=false;chord="Single"}
+        editingPitch=hit.offsets.first ?? 0
+        glide=hit.slide != nil
+        slidePitch=hit.slide ?? min(24,editingPitch+12)
+        chord=hit.offsets.count>1 ? (hit.offsets[1]-editingPitch==3 ? "Minor":"Major") : "Single"
     }
     func applyNotes(){
         let offsets=(chord=="Major" ? [0,4,7] : chord=="Minor" ? [0,3,7] : [0]).map{$0+editingPitch}
@@ -421,6 +433,8 @@ struct PreviewScreen:View {
             .background(h==nil ? Color.white.opacity(0.10):mint,in:RoundedRectangle(cornerRadius:4))
             .overlay{RoundedRectangle(cornerRadius:4).strokeBorder(s.running && s.runningStep==n ? Color.orange : s.selectedSteps.contains(n) ? Color.white:.clear,lineWidth:2)}
         }.buttonStyle(.plain)
+        .help("Click to toggle. Right-click a hit to edit its notes.")
+        .contextMenu { if h != nil { Button("Edit notes"){s.selectHit(n)} } }
     }
     func mixValue(_ key:WritableKeyPath<Mix,Double>)->Binding<Double>{Binding(get:{s.currentMix[keyPath:key]},set:{var m=s.currentMix;m[keyPath:key]=$0;s.setMix(m)})}
     func mixFlag(_ key:WritableKeyPath<Mix,Bool>)->Binding<Bool>{Binding(get:{s.currentMix[keyPath:key]},set:{var m=s.currentMix;m[keyPath:key]=$0;s.setMix(m)})}

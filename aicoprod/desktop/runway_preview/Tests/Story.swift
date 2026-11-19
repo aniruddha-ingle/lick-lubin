@@ -63,6 +63,10 @@ import Foundation
             RunLoop.main.run(until:Date().addingTimeInterval(0.04))
         }
         precondition(!s.running && visited==[49,50])
+        s.bar=1;s.allBars=false
+        s.tap(6);precondition(s.pattern[6] != nil)
+        s.selectHit(6);precondition(s.selectedSteps==[6] && s.pattern[6] != nil)
+        s.tap(6);precondition(s.pattern[6]==nil && !s.selectedSteps.contains(6))
         let oldName=s.headline
         s.newProject()
         s.project?.name=oldName
