@@ -98,3 +98,17 @@ python host_bridge.py
 * **Act I — `LOOP` Mode:** Builds a 4-bar loop at **101 BPM** in **D Major** (chords, bassline, boom-bap/trap drums, mix balance).
 * **Act II — `ARRANGE` Mode:** Stitches `Intro (4 bars) -> Verse (8 bars) -> Chorus (4 bars)` into a 16-bar timeline while exporting archival `.mid` stems to `./AI_Drops/`.
 * **Act III — `PERFORMANCE` Mode:** Atomically resets playhead to Bar 1, engages `LIVE SILENT`, unmutes your vocal mic (`CC 33 = 127`), plays the full 16-bar arrangement (`38.02s`), and sends `CC 123` (`All Notes Off`) on the final downbeat.
+
+
+## Lick Lubin Technical Goal Deck
+<img width="1291" height="727" alt="image" src="https://github.com/user-attachments/assets/34092f43-2471-472e-b60d-4a6f9a350e0a" />
+
+<img width="1295" height="729" alt="image" src="https://github.com/user-attachments/assets/93317bd0-de53-498d-93ae-a44d19aaa503" />
+
+<img width="1292" height="729" alt="image" src="https://github.com/user-attachments/assets/5c6d6824-ee63-4170-bfc7-8e0521a4e317" />
+
+<img width="1293" height="728" alt="image" src="https://github.com/user-attachments/assets/6e4697c9-0aa6-4bfc-991e-f228256eb253" />
+
+<img width="1295" height="730" alt="image" src="https://github.com/user-attachments/assets/d4a7b681-e9d9-40d5-85f7-cc224cde9bc0" />
+
+
