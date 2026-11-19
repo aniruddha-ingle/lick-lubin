@@ -79,6 +79,13 @@ enum Mode:String,CaseIterable { case steps="Track loop",song="Song loop",runway=
         launchStamp=try? exeURL?.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate
         if let data=try? Data(contentsOf:saveURL), let p=try? JSONDecoder().decode(Project.self,from:data),
            !p.loops.isEmpty,p.mixes.count==10,p.slots.count==4 { project=p;loopID=p.loops[0].id }
+        if let state=ProcessInfo.processInfo.environment["ORCHID_RELOAD_VIEW"]?.split(separator:"|").map(String.init),
+           state.count==10,let id=Int(state[0]),loopExists(id),let t=Int(state[1]),names.indices.contains(t),
+           let b=Int(state[2]),(1...16).contains(b),let m=Mode(rawValue:state[3]),
+           let first=Int(state[7]),let last=Int(state[8]),(1...64).contains(first),(first...64).contains(last) {
+            loopID=id;track=t;bar=b;mode=m;showHome=state[4]=="1";allBars=state[5]=="1";metro=state[6]=="1"
+            rangeStart=first;rangeEnd=last;repeatRunway=state[9]=="1"
+        }
         message=audio.prepare(manifestURL: Bundle.main.url(forResource:"manifest",withExtension:"json"))
         syncMix()
         timer=Timer.scheduledTimer(withTimeInterval:0.012,repeats:true){ [weak self] _ in
@@ -95,6 +102,11 @@ enum Mode:String,CaseIterable { case steps="Track loop",song="Song loop",runway=
     func reload() {
         save()
         let config=NSWorkspace.OpenConfiguration(); config.createsNewApplicationInstance=true
+        var environment=ProcessInfo.processInfo.environment
+        let view=[String(loopID),String(track),String(bar),mode.rawValue,showHome ? "1":"0",allBars ? "1":"0",
+                  metro ? "1":"0",String(rangeStart),String(rangeEnd),repeatRunway ? "1":"0"]
+        environment["ORCHID_RELOAD_VIEW"]=view.joined(separator:"|")
+        config.environment=environment
         NSWorkspace.shared.openApplication(at:Bundle.main.bundleURL,configuration:config) { _,error in
             DispatchQueue.main.async { if error==nil { NSApp.terminate(nil) } }
         }
