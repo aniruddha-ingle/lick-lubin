@@ -38,11 +38,31 @@ import Foundation
         precondition(s.track==0 && s.project?.mixes[1].sidechainFrom=="Clean")
         say("loop the written part of the runway")
         precondition(s.mode == .runway && s.rangeStart==1 && s.rangeEnd==64)
-        say("loop runway bars 49 through 64")
+        say("loop runway bars forty-nine through sixty four")
         precondition(s.rangeStart==49 && s.rangeEnd==64 && s.repeatRunway)
         say("stop")
+        // Add a note only in bar four, then edit another step across the loop.
+        s.bar=4;s.allBars=false;s.setNote(step:6,offsets:[3],slide:nil)
+        s.allBars=true;s.setNote(step:9,offsets:[0],slide:nil)
+        precondition(s.pitches(step:6)==[3] && s.pitches(step:9)==[0])
+        s.bar=3
+        precondition(s.pitches(step:6).isEmpty && s.pitches(step:9)==[0])
+        say("0-indexed steps 0 and 10")
+        precondition(Set(s.pattern.keys)==[1,11])
         let restored=PreviewStore()
         precondition(restored.project?.name==s.project?.name && restored.project?.slots==s.project?.slots)
+        s.newProject(demo:true)
+        precondition(s.project?.slots == [1,2,3,4] && s.project?.loops.count == 4)
+        precondition(s.mode == .runway && s.rangeStart == 49 && s.rangeEnd == 64 && !s.running)
+        precondition(s.currentLoop?.pattern(0,4)[11]?.slide == 5)
+        say("play runway bars 49 through 50")
+        var visited=Set<Int>()
+        let deadline=Date().addingTimeInterval(8)
+        while s.running && Date()<deadline {
+            visited.insert(s.runningBar)
+            RunLoop.main.run(until:Date().addingTimeInterval(0.04))
+        }
+        precondition(!s.running && visited==[49,50])
         print("Passed the spoken producer story, loop independence, mixer routing, and project restore.")
     }
 }

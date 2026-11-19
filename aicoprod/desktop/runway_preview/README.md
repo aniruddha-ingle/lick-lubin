@@ -11,6 +11,8 @@ open "$HOME/Applications/Lick-Lubin Runway.app"
 
 The default pack location is `~/Music/Lick-Lubin/Orchid Sample Pack`. Set `ORCHID_SAMPLE_ROOT` for a different pack. The local microphone requires on-device English speech recognition and microphone permission. You can also type each phrase and press Return.
 
+Choose **Demo beat** on Home for an editable four-section arrangement cued at bars 49–64. Press Play to loop that section. **New project** opens an empty loop for the following live build.
+
 ## Rehearse a beat
 
 1. From Home, say **open a new Lick-Lubin project**.

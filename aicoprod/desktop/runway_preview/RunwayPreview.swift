@@ -146,7 +146,7 @@ enum Mode:String,CaseIterable { case steps="Track loop",song="Song loop",runway=
             project=p;allBars=false;bar=1;selectedSteps=[];message="New Flow imported to bars 1–4 of "+names[track]+"."
         }catch{message=error.localizedDescription}
     }
-    func newProject() {
+    func newProject(demo:Bool=false) {
         stop()
         // Keep the previous project available on disk when starting another.
         if let p=project {
@@ -158,7 +158,10 @@ enum Mode:String,CaseIterable { case steps="Track loop",song="Song loop",runway=
         let b=["nut","badger","biscuit","moth","wizard","squid"].randomElement()!
         project=Project(name:"\(a)-\(b)-\(Int.random(in:1...999))")
         track=6;bar=1;loopID=1;mode = .steps;rangeStart=1;rangeEnd=64;selectedSteps=[];showHome=false;metro=false;allBars=true;syncMix()
-        message="Fresh loop. Select Closed and try eighths."
+        if demo {
+            project?.arrangeDemoBeat();loopID=4;mode = .runway;rangeStart=49;rangeEnd=64;selectTrack(0);syncMix()
+            message="Bars 49–64 are ready. Press Play to rehearse the final section."
+        } else { message="Fresh loop. Select Closed and try eighths." }
     }
     func duplicateLoop() {
         guard var p=project,var loop=currentLoop else{return}
@@ -272,6 +275,7 @@ struct PreviewScreen:View {
                 VStack(alignment:.leading,spacing:16){
                     Text("Orchid studio").font(.system(size:42,weight:.bold,design:.rounded))
                     HStack{Button("New project"){s.newProject()}.buttonStyle(.borderedProminent)
+                        Button("Demo beat"){s.newProject(demo:true)}
                         if let p=s.project{Button("Resume " + p.name){s.showHome=false}}
                         if !s.archiveNames.isEmpty{Menu("Saved projects"){ForEach(s.archiveNames,id:\.self){name in Button(name){s.openArchive(name)}}}.fixedSize()}
                     }

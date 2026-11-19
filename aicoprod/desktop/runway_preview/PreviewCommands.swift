@@ -21,12 +21,21 @@ private func normalized(_ transcript: String) -> String {
         .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ".!?")))
         .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
     let words = ["zero","one","two","three","four","five","six","seven","eight","nine","ten","eleven","twelve","thirteen","fourteen","fifteen","sixteen"]
-    for (n,word) in words.enumerated() {
+    for (tens,value) in [("twenty",20),("thirty",30),("forty",40),("fifty",50),("sixty",60)] {
+        for ones in 1...9 {
+            s=s.replacingOccurrences(of:"\\b"+tens+"[- ]"+words[ones]+"\\b",with:String(value+ones),options:.regularExpression)
+        }
+        s=s.replacingOccurrences(of:"\\b"+tens+"\\b",with:String(value),options:.regularExpression)
+    }
+    for (n,word) in (words+["seventeen","eighteen","nineteen"]).enumerated() {
         s = s.replacingOccurrences(of: "\\b" + word + "\\b", with: String(n), options: .regularExpression)
     }
     for (i,word) in ["first","second","third","fourth"].enumerated() {
         s = s.replacingOccurrences(of: "\\b" + word + "\\b", with: String(i+1), options: .regularExpression)
     }
+    s=s.replacingOccurrences(of:#"\b([a-g]) sharp ?([1-5])?\b"#,with:"$1#$2",options:.regularExpression)
+        .replacingOccurrences(of:#"\b([a-g]) flat ?([1-5])?\b"#,with:"$1b$2",options:.regularExpression)
+        .replacingOccurrences(of:#"\b([a-g]) ([1-5])\b"#,with:"$1$2",options:.regularExpression)
     return s.replacingOccurrences(of: #"\b(\d+)(st|nd|rd|th)\b"#, with: "$1", options: .regularExpression)
         .replacingOccurrences(of:"hi hat",with:"hihat").replacingOccurrences(of:"run way",with:"runway")
 }
