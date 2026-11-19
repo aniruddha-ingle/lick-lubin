@@ -1,0 +1,13 @@
+aicoprod/
+├── platformio.ini
+├── requirements.txt
+├── host_bridge.py
+├── run_stage.sh
+├── src/
+│   └── main.cpp
+└── tests/
+    ├── conftest.py
+    ├── test_serial_framing.py
+    ├── test_coremidi_sequencer.py
+    ├── test_arrangement_modes.py
+    └── test_realtime_interrupts.py
