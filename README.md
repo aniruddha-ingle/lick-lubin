@@ -20,10 +20,10 @@
                                                              │       FL Studio (Sound Module)   │
                                                              │ • Ch 1 (0x90): Piano (D Major)   │
                                                              │ • Ch 2 (0x91): Bass 1            │
-│ • Ch 3 (0x92): FPC Drums         │
-│ • Ch 16 (0xBF): Mixer CCs 20–33  │
-│ • Insert 4: Scarlett Vocal Mic   │
-└──────────────────────────────────┘
+                                                             │ • Ch 3 (0x92): FPC Drums         │
+                                                             │ • Ch 16 (0xBF): Mixer CCs 20–33  │
+                                                             │ • Insert 4: Scarlett Vocal Mic   │
+                                                             └──────────────────────────────────┘
 ```
 
 ---
