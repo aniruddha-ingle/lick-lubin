@@ -157,10 +157,21 @@ final class OrchidPreviewAudio {
     private var aliases: [String: String] = [:]
     private var tick: WaveRenderer?
     private var status = ""
+    private var routeObserver:NSObjectProtocol?
+    var routeFailure:((String)->Void)?
+    deinit { if let routeObserver { NotificationCenter.default.removeObserver(routeObserver) } }
+
+    func resumeOutput() throws {
+        guard tick != nil else {
+            throw NSError(domain:"OrchidAudio",code:1,userInfo:[NSLocalizedDescriptionKey:"Audio graph is unavailable. Check the bundled manifest and relaunch Runway."])
+        }
+        if !engine.isRunning { try engine.start() }
+    }
 
     @discardableResult
     func prepare(manifestURL: URL? = nil) -> String {
         if engine.isRunning { return status }
+        if let routeObserver { NotificationCenter.default.removeObserver(routeObserver); self.routeObserver=nil }
         engine.stop()
         engine = AVAudioEngine()
         aliases.removeAll()
@@ -214,6 +225,10 @@ final class OrchidPreviewAudio {
             engine.mainMixerNode.outputVolume = 0.65
             engine.prepare()
             try engine.start()
+            routeObserver=NotificationCenter.default.addObserver(forName:.AVAudioEngineConfigurationChange,object:engine,queue:.main){ [weak self] _ in
+                guard let self else{return}
+                do {try self.resumeOutput()} catch { self.routeFailure?("Audio output: "+error.localizedDescription) }
+            }
             status = "\(channels.count)/\(entries.count) Orchid samples loaded"
             if channels.count != entries.count { status += " · Check ORCHID_SAMPLE_ROOT" }
         } catch { status = "Audio unavailable: \(error.localizedDescription)" }

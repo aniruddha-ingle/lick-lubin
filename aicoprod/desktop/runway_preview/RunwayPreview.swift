@@ -82,7 +82,7 @@ enum Mode:String,CaseIterable { case steps="Track loop",song="Song loop",runway=
     var currentLoop:BeatLoop? { project?.loops.first { $0.id==loopID } }
     var pattern:[Int:Hit] { currentLoop?.pattern(track,bar) ?? [:] }
     var headline:String { project?.name ?? "Lick-Lubin" }
-    init() {
+    init(audioManifest:URL?=Bundle.main.url(forResource:"manifest",withExtension:"json")) {
         let base=ProcessInfo.processInfo.environment["LICK_LUBIN_PROJECT_DIR"].map{ URL(fileURLWithPath:$0,isDirectory:true) } ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("Lick-Lubin")
         saveURL=base.appendingPathComponent("RunwayPreview.json")
         launchStamp=try? exeURL?.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate
@@ -95,8 +95,13 @@ enum Mode:String,CaseIterable { case steps="Track loop",song="Song loop",runway=
             loopID=id;track=t;bar=b;mode=m;showHome=state[4]=="1";allBars=state[5]=="1";metro=state[6]=="1"
             rangeStart=first;rangeEnd=last;repeatRunway=state[9]=="1"
         }
-        message=audio.prepare(manifestURL: Bundle.main.url(forResource:"manifest",withExtension:"json"))
+        message=audio.prepare(manifestURL:audioManifest)
+        audio.routeFailure = { [weak self] reason in self?.stop();self?.message=reason }
         syncMix()
+        if CommandLine.arguments.contains("--test-output") {
+            if project != nil {showHome=false}
+            DispatchQueue.main.asyncAfter(deadline:.now()+1){ [weak self] in self?.testOutput() }
+        }
         timer=Timer.scheduledTimer(withTimeInterval:0.012,repeats:true){ [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
@@ -286,8 +291,16 @@ enum Mode:String,CaseIterable { case steps="Track loop",song="Song loop",runway=
         guard let bars=writtenBars else{message="Add a hit or place a loop on the runway first.";return}
         rangeStart=bars.lowerBound;rangeEnd=bars.upperBound;repeatRunway=true;start(.runway)
     }
+    func testOutput() {
+        do {try audio.resumeOutput()} catch {message="Audio output: "+error.localizedDescription;return}
+        message="Testing output with four metronome clicks."
+        for beat in 0..<4 {
+            DispatchQueue.main.asyncAfter(deadline:.now()+Double(beat)*0.45) { [weak self] in self?.audio.click(accent:beat==0) }
+        }
+    }
     func start(_ m:Mode){
         guard project != nil else{return}
+        do {try audio.resumeOutput()} catch {message="Audio output: "+error.localizedDescription;return}
         showHome=false
         if running && m != .runway {if m != mode { audio.stop() }; mode=m;return}
         audio.stop();mode=m;running=true;emitted = -1;anchor=ProcessInfo.processInfo.systemUptime;tick()
@@ -353,6 +366,7 @@ struct PreviewScreen:View {
                 TextField("Say or type a music command",text:$s.command).textFieldStyle(.roundedBorder)
                     .onSubmit{let text=s.command;s.command="";s.submitTranscript(text)}
                 Button("Send"){let text=s.command;s.command="";s.submitTranscript(text)}.disabled(s.command.isEmpty)
+                Button("Test sound"){s.testOutput()}
                 Button{ s.dictate() }label:{Label("Speak",systemImage:"mic.fill")}
             }
             Text(s.message).font(.caption).foregroundStyle(.secondary).lineLimit(2)

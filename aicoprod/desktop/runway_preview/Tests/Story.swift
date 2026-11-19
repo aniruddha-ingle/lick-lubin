@@ -4,7 +4,7 @@ import Foundation
     @MainActor static func main() {
         // Run only with an isolated application-support directory.
         precondition(ProcessInfo.processInfo.environment["ORCHID_REHEARSAL"] == "1")
-        let s = PreviewStore()
+        let s = PreviewStore(audioManifest:URL(fileURLWithPath:"../audio_proof/manifest.json"))
         func say(_ line:String) {
             s.submitTranscript(line)
             precondition(s.message.hasPrefix("Applied"), "\(line) → \(s.message)")
@@ -49,7 +49,7 @@ import Foundation
         precondition(s.pitches(step:6).isEmpty && s.pitches(step:9)==[0])
         say("0-indexed steps 0 and 10")
         precondition(Set(s.pattern.keys)==[1,11])
-        let restored=PreviewStore()
+        let restored=PreviewStore(audioManifest:URL(fileURLWithPath:"../audio_proof/manifest.json"))
         precondition(restored.project?.name==s.project?.name && restored.project?.slots==s.project?.slots)
         s.newProject(demo:true)
         precondition(s.project?.slots == [1,2,3,4] && s.project?.loops.count == 4)
