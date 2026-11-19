@@ -58,6 +58,13 @@ extension PreviewStore {
 
     private func applyPhrase(_ raw:String) throws {
         var s=normalized(raw)
+        for loop in project?.loops ?? [] {
+            s=s.replacingOccurrences(of:loop.tag,with:"loop "+String(loop.id))
+        }
+        s=s.replacingOccurrences(of:"heavy weight",with:"heavyweight")
+            .replacingOccurrences(of:"side-chain",with:"sidechain")
+            .replacingOccurrences(of:", and start",with:" and start")
+            .replacingOccurrences(of:#"\b(?:the )?(\d+) step\b"#,with:"step $1",options:.regularExpression)
         let zero=s.contains("0-indexed") || s.contains("0 indexed") || s.contains("zero-based") || s.contains("0-based")
         for tag in ["0-indexed","0 indexed","zero-based","0-based"] { s=s.replacingOccurrences(of:tag,with:"") }
         s=s.trimmingCharacters(in:.whitespaces).replacingOccurrences(of:"  ",with:" ")
@@ -66,6 +73,8 @@ extension PreviewStore {
         }
         if ["new project","open a new lick-lubin project","open a new lick lubin project","open a new project"].contains(s) { newProject();return }
         guard project != nil else { throw PhraseError("Open a new project first.") }
+        if s=="import new flow" {importMotif();guard message.hasPrefix("New Flow imported") else {throw PhraseError(message)};return}
+        if let g=groups("edit loop ?([0-9]+)",s),let id=Int(g[0]),selectLoop(id){return}
         if s=="stop" { stop();return }
         if s=="play" { start(mode);return }
         if s=="metronome on" || s=="metronome off" { metro=s.hasSuffix("on");return }
@@ -126,7 +135,7 @@ extension PreviewStore {
             guard loopExists(new) && slots.allSatisfy({currentPlacement(slot:$0)==old}) else {throw PhraseError("Runway placements do not match that request.")}
             for slot in slots{placeLoop(new,slot:slot)};return
         }
-        if let g=groups("arrange loop ?([0-9]+) (?:on|in) (?:the )?(?:slots? )?([0-9, and]+)(?: bars? of the runway)?",s),let id=Int(g[0]){
+        if let g=groups("arrange loop ?([0-9]+) (?:on|in) (?:the )?(?:(?:slots?|bars?) )?([0-9, and]+)(?: bars? of the runway)?",s),let id=Int(g[0]){
             let slots=try positions(g[1],zeroBased:false,limit:4);guard loopExists(id) else {throw PhraseError("Unknown loop.")}
             for slot in slots{placeLoop(id,slot:slot)};return
         }
@@ -135,7 +144,7 @@ extension PreviewStore {
             updateMix(b){$0.sidechainFrom=names[a]};return
         }
         if let g=groups("(add echo to|remove echo from|put) (.+?)( in a big room)?",s),g[0] != "put" || !g[2].isEmpty {
-            let i=try trackIndex(g[1]);updateMix(i) { if g[0]=="put" {$0.reverbMix=0.5} else {$0.delayMix=g[0]=="add echo to" ? 0.3 : 0} };return
+            let i=try trackIndex(g[1]);updateMix(i) { if g[0]=="put" {$0.reverbMix=0.5;$0.hall=true} else {$0.delayMix=g[0]=="add echo to" ? 0.3 : 0} };return
         }
         if let g=groups("(?:set )?(rack|echo|reverb) (?:mix|amount) (?:on|for) (.+) to ([0-9]+)(?: percent|%)",s),
            let amount=Int(g[2]),(0...100).contains(amount){
@@ -143,6 +152,9 @@ extension PreviewStore {
         }
         if let g=groups("(?:set )?(.+) gain (?:to )?(-?[0-9]+) (?:db|decibels)",s),let db=Double(g[1]),(-60...12).contains(db){
             updateMix(try trackIndex(g[0])){$0.gainDB=db};return
+        }
+        if let g=groups("(room|hall) reverb on for (.+)",s){
+            let i=try trackIndex(g[1]);updateMix(i){$0.hall=(g[0]=="hall");$0.reverbMix=0.3};return
         }
         if let g=groups("(rack|cut itself|echo|reverb) (on|off) for (.+)",s){
             let i=try trackIndex(g[2]);let on=g[1]=="on";updateMix(i){mix in

@@ -14,6 +14,7 @@ struct Mix: Codable, Equatable {
     var gainDB = 0.0, rackMix = 1.0, delayMix = 0.0, reverbMix = 0.0
     var rackOn = true, cutItself = true
     var sidechainFrom:String? = nil
+    var hall:Bool? = nil
 }
 struct BeatLoop: Codable, Identifiable {
     var id:Int
@@ -167,7 +168,7 @@ enum Mode:String,CaseIterable { case steps="Track loop",song="Song loop",runway=
     }
     func clearSlot(_ slot:Int) { guard var p=project,(1...4).contains(slot) else{return};p.slots[slot-1]=nil;project=p }
     func setMix(_ mix:Mix){guard var p=project else{return};p.mixes[track]=mix;project=p;applyMix(track,mix)}
-    private func applyMix(_ i:Int,_ m:Mix){audio.mix(track:names[i],gainDB:m.gainDB,rackOn:m.rackOn,rackMix:m.rackMix,delayMix:m.delayMix,reverbMix:m.reverbMix,cutItself:m.cutItself,sidechainFrom:m.sidechainFrom)}
+    private func applyMix(_ i:Int,_ m:Mix){audio.mix(track:names[i],gainDB:m.gainDB,rackOn:m.rackOn,rackMix:m.rackMix,delayMix:m.delayMix,reverbMix:m.reverbMix,cutItself:m.cutItself,sidechainFrom:m.sidechainFrom,hall:m.hall ?? true)}
     private func syncMix(){ for i in names.indices {applyMix(i,project?.mixes[i] ?? Mix())} }
     private func write(_ updated:[Int:Hit]){
         guard var p=project,let i=p.loops.firstIndex(where:{$0.id==loopID}) else{return}
@@ -392,6 +393,9 @@ struct PreviewScreen:View {
             HStack{Text("Mixer").font(.title3.bold());Text(names[s.track]).foregroundStyle(mint);Spacer()
                 Toggle("Rack",isOn:mixFlag(\.rackOn)).toggleStyle(.checkbox)
                 Toggle("Cut Itself",isOn:mixFlag(\.cutItself)).toggleStyle(.checkbox)
+                Picker("Space",selection:Binding(get:{s.currentMix.hall ?? true},set:{var m=s.currentMix;m.hall=$0;s.setMix(m)})){
+                    Text("Room").tag(false);Text("Hall").tag(true)
+                }.fixedSize()
                 Picker("Ducking",selection:Binding(get:{s.currentMix.sidechainFrom ?? ""},set:{var m=s.currentMix;m.sidechainFrom=$0.isEmpty ? nil:$0;s.setMix(m)})){
                     Text("Off").tag("")
                     ForEach(names.filter{$0 != names[s.track]},id:\.self){t in Text(t+" ducks "+names[s.track]).tag(t)}

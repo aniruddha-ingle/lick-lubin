@@ -146,6 +146,7 @@ final class OrchidPreviewAudio {
         let delay: AVAudioUnitDelay
         let reverb: AVAudioUnitReverb
         var cut = true
+        var hall = true
         var rackOn = true
         var rackMix: Double = 1
         var source: String?
@@ -249,9 +250,10 @@ final class OrchidPreviewAudio {
         tick?.enqueue(SampleEvent(action:.release))
     }
     func mix(track: String, gainDB: Double, rackOn: Bool, rackMix: Double, delayMix: Double,
-             reverbMix: Double, cutItself: Bool, sidechainFrom: String?) {
+             reverbMix: Double, cutItself: Bool, sidechainFrom: String?, hall: Bool = true) {
         guard let id = aliases[track.lowercased()], var channel = channels[id] else { return }
         channel.wave.setGain(Float(pow(10,max(-72,min(12,gainDB))/20)))
+        if channel.hall != hall { channel.reverb.loadFactoryPreset(hall ? .mediumHall : .mediumRoom);channel.hall=hall }
         channel.cut = cutItself
         channel.rackOn = rackOn
         channel.rackMix = max(0,min(1,rackMix))
