@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.22)
 
 project(LickLubinAudioProof VERSION 0.1.0 LANGUAGES C CXX)
 
+include(CTest)
+
 include(FetchContent)
 
 FetchContent_Declare(
@@ -46,3 +48,9 @@ target_link_libraries(LickLubinAudioProof
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags
 )
+
+if (BUILD_TESTING)
+    add_executable(ArrangementModelTests Tests/ArrangementModelTests.cpp)
+    target_compile_features(ArrangementModelTests PRIVATE cxx_std_17)
+    add_test(NAME ArrangementModelBehavior COMMAND ArrangementModelTests)
+endif()

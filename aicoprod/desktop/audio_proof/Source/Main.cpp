@@ -1,16 +1,21 @@
 #include <juce_audio_devices/juce_audio_devices.h>
+#include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_core/juce_core.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <BinaryData.h>
+#include "ArrangementModel.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <memory>
+#include <thread>
+#include <vector>
 
 namespace
 {
@@ -26,10 +31,10 @@ const juce::String expectedSamplePath {
     "Drum One Shots/Cymatics - Orchid Kick - Clean (F).wav"
 };
 
-juce::var findNamedSample (const juce::var& collection)
+juce::var findNamedEntry (const juce::var& collection, const juce::String& wantedId)
 {
     if (auto* object = collection.getDynamicObject())
-        return object->getProperty (juce::Identifier (sampleId));
+        return object->getProperty (juce::Identifier (wantedId));
 
     if (auto* entries = collection.getArray())
     {
@@ -41,7 +46,7 @@ juce::var findNamedSample (const juce::var& collection)
                 if (id.isEmpty())
                     id = object->getProperty (juce::Identifier ("sample_id")).toString();
 
-                if (id == sampleId)
+                if (id == wantedId)
                     return entry;
             }
         }
@@ -68,7 +73,7 @@ juce::String readSamplePath (const juce::var& entry)
     return {};
 }
 
-juce::String getSamplePathFromManifest (juce::String& error)
+juce::var parseEmbeddedManifest (juce::String& error)
 {
     if (BinaryData::manifest_json == nullptr || BinaryData::manifest_jsonSize <= 0)
     {
@@ -85,36 +90,117 @@ juce::String getSamplePathFromManifest (juce::String& error)
         return {};
     }
 
-    juce::var entry;
+    return manifest;
+}
 
-    if (auto* object = manifest.getDynamicObject())
+struct MotifNote
+{
+    int startTick = 0;
+    int durationTicks = 0;
+    int midiNote = 0;
+    int velocity = 0;
+    int channel = 1;
+};
+
+struct Motif
+{
+    juce::String alias;
+    juce::String key;
+    double tempoBpm = 0.0;
+    int ticksPerQuarter = 0;
+    int endTick = 0;
+    int trackCount = 0;
+    std::vector<MotifNote> notes;
+};
+
+bool isSafeRelativePath (const juce::String& path)
+{
+    const auto normalized = path.replaceCharacter ('\\', '/');
+    return normalized.isNotEmpty() && ! normalized.startsWithChar ('/')
+        && ! normalized.contains (":") && ! normalized.contains ("../")
+        && normalized != "..";
+}
+
+juce::File resolveLocalFile (const juce::File& root, const juce::String& path)
+{
+    return root.getChildFile (path.replaceCharacter ('\\', '/'));
+}
+
+bool importMotif (const juce::var& manifest, const juce::File& root,
+                  Motif& motif, juce::String& error)
+{
+    auto* object = manifest.getDynamicObject();
+    const auto entry = object != nullptr ? findNamedEntry (
+        object->getProperty (juce::Identifier ("motifs")), "new_flow") : juce::var();
+    if (entry.isVoid() || entry.getDynamicObject() == nullptr)
     {
-        entry = findNamedSample (object->getProperty (juce::Identifier ("samples")));
-        if (! entry.isVoid())
+        error = "Motif error: New Flow entry is missing.";
+        return false;
+    }
+
+    auto* metadata = entry.getDynamicObject();
+    const auto relativePath = readSamplePath (entry).replaceCharacter ('\\', '/');
+    const auto tempo = static_cast<double> (metadata->getProperty (juce::Identifier ("tempo_bpm")));
+    const auto key = metadata->getProperty (juce::Identifier ("key")).toString();
+    if (! isSafeRelativePath (relativePath) || tempo <= 0.0 || key.isEmpty()
+        || metadata->getProperty (juce::Identifier ("metadata_source")).toString() != "filename")
+    {
+        error = "Motif error: New Flow path or filename metadata is invalid.";
+        return false;
+    }
+
+    const auto file = resolveLocalFile (root, relativePath);
+    if (! file.isAChildOf (root) || ! file.existsAsFile())
+    {
+        error = "MIDI unavailable: " + file.getFullPathName();
+        return false;
+    }
+
+    juce::FileInputStream input (file);
+    juce::MidiFile midi;
+    if (! input.openedOk() || ! midi.readFrom (input) || midi.getTimeFormat() <= 0
+        || midi.getNumTracks() < 1)
+    {
+        error = "MIDI error: New Flow is not a readable PPQ MIDI file.";
+        return false;
+    }
+
+    Motif imported;
+    imported.alias = metadata->getProperty (juce::Identifier ("alias")).toString();
+    imported.key = key;
+    imported.tempoBpm = tempo;
+    imported.ticksPerQuarter = midi.getTimeFormat();
+    imported.trackCount = midi.getNumTracks();
+    for (int trackIndex = 0; trackIndex < midi.getNumTracks(); ++trackIndex)
+    {
+        const auto* track = midi.getTrack (trackIndex);
+        if (track == nullptr)
+            continue;
+        imported.endTick = juce::jmax (imported.endTick,
+                                        static_cast<int> (std::ceil (track->getEndTime())));
+        for (int eventIndex = 0; eventIndex < track->getNumEvents(); ++eventIndex)
         {
-            const auto path = readSamplePath (entry);
-            if (path.isNotEmpty())
-                return path;
+            const auto* event = track->getEventPointer (eventIndex);
+            if (event == nullptr || ! event->message.isNoteOn())
+                continue;
+            const auto noteOffIndex = track->getIndexOfMatchingKeyUp (eventIndex);
+            const auto noteOffTick = noteOffIndex >= 0
+                                   ? track->getEventTime (noteOffIndex) : event->message.getTimeStamp();
+            imported.notes.push_back ({ static_cast<int> (std::lround (event->message.getTimeStamp())),
+                                        juce::jmax (0, static_cast<int> (std::lround (
+                                            noteOffTick - event->message.getTimeStamp()))),
+                                        event->message.getNoteNumber(),
+                                        static_cast<int> (event->message.getVelocity()),
+                                        event->message.getChannel() });
         }
-
-        entry = object->getProperty (juce::Identifier (sampleId));
     }
-    else
+    if (imported.notes.empty() || imported.ticksPerQuarter <= 0 || imported.endTick <= 0)
     {
-        entry = findNamedSample (manifest);
+        error = "MIDI error: New Flow contains no usable note timeline.";
+        return false;
     }
-
-    if (entry.isVoid())
-    {
-        error = "Manifest error: entry 'clean_kick' is missing.";
-        return {};
-    }
-
-    const auto path = readSamplePath (entry);
-    if (path.isEmpty())
-        error = "Manifest error: entry 'clean_kick' has no relative path.";
-
-    return path;
+    motif = std::move (imported);
+    return true;
 }
 
 struct Voice
@@ -127,6 +213,100 @@ struct Voice
     int releaseSamplesTotal = 0;
 };
 }
+
+class ArrangementGridComponent final : public juce::Component
+{
+public:
+    explicit ArrangementGridComponent (licklubin::ArrangementModel& state)
+        : model (state)
+    {
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    }
+
+    std::function<void (int, int, bool)> onToggle;
+
+    void paint (juce::Graphics& graphics) override
+    {
+        constexpr int labelWidth = 145;
+        constexpr int sectionHeight = 24;
+        constexpr int barHeaderHeight = 24;
+        constexpr int trackHeight = 25;
+
+        graphics.fillAll (juce::Colour::fromRGB (29, 33, 40));
+        auto bounds = getLocalBounds();
+        const auto cellWidth = static_cast<float> (juce::jmax (1, bounds.getWidth() - labelWidth))
+                             / licklubin::ArrangementModel::barCount;
+        auto header = bounds.removeFromTop (sectionHeight);
+        graphics.setColour (juce::Colours::lightgrey);
+        for (const auto& section : licklubin::ArrangementModel::sections)
+        {
+            const auto x = labelWidth + static_cast<int> (std::lround (section.firstBar * cellWidth));
+            const auto width = static_cast<int> (std::lround (section.barCount * cellWidth));
+            graphics.drawText (section.name, x, header.getY(), width, header.getHeight(),
+                               juce::Justification::centred, false);
+        }
+
+        auto barHeader = bounds.removeFromTop (barHeaderHeight);
+        graphics.setColour (juce::Colour::fromRGB (75, 84, 98));
+        graphics.drawLine (static_cast<float> (labelWidth), static_cast<float> (barHeader.getY()),
+                           static_cast<float> (labelWidth), static_cast<float> (getHeight()), 1.0f);
+        for (int bar = 0; bar < licklubin::ArrangementModel::barCount; ++bar)
+        {
+            const auto x = labelWidth + static_cast<int> (std::lround (bar * cellWidth));
+            const auto width = static_cast<int> (std::ceil (cellWidth));
+            graphics.setColour (juce::Colour::fromRGB (38, 43, 52));
+            graphics.fillRect (x, barHeader.getY(), width, barHeader.getHeight());
+            graphics.setColour (juce::Colours::lightgrey);
+            graphics.drawText (juce::String (bar + 1), x, barHeader.getY(), width,
+                               barHeader.getHeight(), juce::Justification::centred, false);
+        }
+
+        for (int track = 0; track < licklubin::ArrangementModel::trackCount; ++track)
+        {
+            const auto row = bounds.removeFromTop (trackHeight);
+            graphics.setColour (juce::Colours::lightgrey);
+            graphics.drawText (licklubin::ArrangementModel::tracks[static_cast<size_t> (track)].alias,
+                               0, row.getY(), labelWidth - 8, row.getHeight(),
+                               juce::Justification::centredRight, false);
+            for (int bar = 0; bar < licklubin::ArrangementModel::barCount; ++bar)
+            {
+                const auto x = labelWidth + static_cast<int> (std::lround (bar * cellWidth));
+                const auto width = static_cast<int> (std::ceil (cellWidth));
+                const auto cell = juce::Rectangle<int> (x + 2, row.getY() + 2,
+                                                         juce::jmax (1, width - 4), row.getHeight() - 4);
+                graphics.setColour (model.hasClip (track, bar)
+                    ? juce::Colour::fromRGB (104, 178, 141)
+                    : juce::Colour::fromRGB (49, 56, 67));
+                graphics.fillRoundedRectangle (cell.toFloat(), 3.0f);
+                graphics.setColour (juce::Colour::fromRGB (70, 78, 91));
+                graphics.drawRect (cell, 1);
+            }
+        }
+    }
+
+    void mouseDown (const juce::MouseEvent& event) override
+    {
+        constexpr int labelWidth = 145;
+        constexpr int headerHeight = 48;
+        constexpr int trackHeight = 25;
+        if (event.x < labelWidth || event.y < headerHeight)
+            return;
+
+        const auto cellWidth = static_cast<float> (juce::jmax (1, getWidth() - labelWidth))
+                             / licklubin::ArrangementModel::barCount;
+        const auto track = (event.y - headerHeight) / trackHeight;
+        const auto bar = static_cast<int> ((event.x - labelWidth) / cellWidth);
+        if (! model.toggleClip (track, bar))
+            return;
+
+        repaint();
+        if (onToggle != nullptr)
+            onToggle (track, bar, model.hasClip (track, bar));
+    }
+
+private:
+    licklubin::ArrangementModel& model;
+};
 
 class MainComponent final : public juce::Component,
                             private juce::AudioIODeviceCallback,
@@ -144,6 +324,30 @@ public:
                              juce::dontSendNotification);
         sampleLabel.setColour (juce::Label::textColourId, juce::Colours::lightgrey);
         addAndMakeVisible (sampleLabel);
+
+        catalogLabel.setColour (juce::Label::textColourId, juce::Colours::lightgrey);
+        catalogLabel.setMinimumHorizontalScale (0.5f);
+        addAndMakeVisible (catalogLabel);
+
+        motifLabel.setColour (juce::Label::textColourId, juce::Colours::lightgrey);
+        addAndMakeVisible (motifLabel);
+
+        arrangementLabel.setColour (juce::Label::textColourId, juce::Colours::lightgrey);
+        arrangementLabel.setMinimumHorizontalScale (0.75f);
+        arrangementLabel.setText ("Arrangement state only: grid edits do not affect audio-proof playback.",
+                                  juce::dontSendNotification);
+        addAndMakeVisible (arrangementLabel);
+
+        arrangementGrid = std::make_unique<ArrangementGridComponent> (arrangementModel);
+        arrangementGrid->onToggle = [this] (int track, int bar, bool enabled)
+        {
+            const auto alias = juce::String (
+                licklubin::ArrangementModel::tracks[static_cast<size_t> (track)].alias);
+            arrangementLabel.setText ("Arrangement state only: " + alias + " bar "
+                + juce::String (bar + 1) + (enabled ? " clip on" : " clip off")
+                + "; audio-proof playback unchanged.", juce::dontSendNotification);
+        };
+        addAndMakeVisible (*arrangementGrid);
 
         statusLabel.setJustificationType (juce::Justification::centredLeft);
         statusLabel.setMinimumHorizontalScale (0.75f);
@@ -167,19 +371,25 @@ public:
         };
         addAndMakeVisible (stopButton);
 
-        loadCleanKickFromManifest();
-
-        deviceInitialisationError = audioDeviceManager.initialise (0, 2, nullptr, true);
-        audioDeviceManager.addAudioCallback (this);
-
-        setSize (520, 270);
+        setSize (1100, 700);
         startTimerHz (20);
         refreshStatus();
+
+        loadWorker = std::thread ([this]
+        {
+            loadCleanKickFromManifest();
+            deviceInitialisationError = audioDeviceManager.initialise (0, 2, nullptr, true);
+            audioDeviceManager.addAudioCallback (this);
+            audioSetupFinished.store (true, std::memory_order_release);
+            loadFinished.store (true, std::memory_order_release);
+        });
     }
 
     ~MainComponent() override
     {
         stopTimer();
+        if (loadWorker.joinable())
+            loadWorker.join();
         audioDeviceManager.removeAudioCallback (this);
         audioDeviceManager.closeAudioDevice();
     }
@@ -199,25 +409,38 @@ public:
         titleLabel.setBounds (area.removeFromTop (38));
         area.removeFromTop (4);
         sampleLabel.setBounds (area.removeFromTop (28));
-        area.removeFromTop (12);
-        statusLabel.setBounds (area.removeFromTop (62));
-        area.removeFromTop (12);
+        catalogLabel.setBounds (area.removeFromTop (25));
+        motifLabel.setBounds (area.removeFromTop (25));
+        area.removeFromTop (8);
+        statusLabel.setBounds (area.removeFromTop (90));
+        area.removeFromTop (8);
 
         auto buttons = area.removeFromTop (44);
         playButton.setBounds (buttons.removeFromLeft (130));
         buttons.removeFromLeft (12);
         stopButton.setBounds (buttons.removeFromLeft (130));
+        area.removeFromTop (10);
+        arrangementLabel.setBounds (area.removeFromTop (24));
+        area.removeFromTop (6);
+        arrangementGrid->setBounds (area.removeFromTop (298));
     }
 
 private:
     void loadCleanKickFromManifest()
     {
-        const auto rootText = juce::SystemStats::getEnvironmentVariable (
+        auto rootText = juce::SystemStats::getEnvironmentVariable (
             "ORCHID_SAMPLE_ROOT", {}).trim();
         if (rootText.isEmpty())
         {
-            sampleLoadStatus = "Sample unavailable: set ORCHID_SAMPLE_ROOT to the Orchid pack folder.";
-            return;
+            const auto fallbackRoot = juce::File::getSpecialLocation (
+                juce::File::userHomeDirectory).getChildFile ("Music/Lick-Lubin/Orchid Sample Pack");
+            if (! fallbackRoot.isDirectory())
+            {
+                sampleLoadStatus = "Sample unavailable: set ORCHID_SAMPLE_ROOT or place the pack at "
+                                 + fallbackRoot.getFullPathName() + ".";
+                return;
+            }
+            rootText = fallbackRoot.getFullPathName();
         }
 
         const juce::File sampleRoot (rootText);
@@ -229,10 +452,84 @@ private:
         }
 
         juce::String manifestError;
-        const auto manifestPath = getSamplePathFromManifest (manifestError).replaceCharacter ('\\', '/');
-        if (manifestPath.isEmpty())
+        const auto manifest = parseEmbeddedManifest (manifestError);
+        if (manifest.isVoid())
         {
             sampleLoadStatus = manifestError;
+            return;
+        }
+
+        const auto* manifestObject = manifest.getDynamicObject();
+        auto* samples = manifestObject != nullptr
+                      ? manifestObject->getProperty (juce::Identifier ("samples")).getArray() : nullptr;
+        if (samples == nullptr)
+        {
+            sampleLoadStatus = "Manifest error: 'samples' must be an array.";
+            return;
+        }
+
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+        int availableSamples = 0;
+        int uniqueSamples = 0;
+        juce::StringArray unavailableAliases;
+        juce::String manifestValidationError;
+        juce::StringArray seenIds;
+        juce::StringArray seenAliases;
+        for (int sampleIndex = 0; sampleIndex < samples->size(); ++sampleIndex)
+        {
+            const auto& entry = samples->getReference (sampleIndex);
+            const auto* sample = entry.getDynamicObject();
+            if (sample == nullptr)
+            {
+                if (manifestValidationError.isEmpty())
+                    manifestValidationError = "Manifest error: sample entry "
+                                            + juce::String (sampleIndex + 1) + " must be an object.";
+                continue;
+            }
+            const auto id = sample->getProperty (juce::Identifier ("id")).toString();
+            const auto alias = sample->getProperty (juce::Identifier ("alias")).toString();
+            const auto relativePath = readSamplePath (entry).replaceCharacter ('\\', '/');
+            if (id.isEmpty() || alias.isEmpty() || ! isSafeRelativePath (relativePath)
+                || seenIds.contains (id) || seenAliases.contains (alias))
+            {
+                if (manifestValidationError.isEmpty())
+                    manifestValidationError = "Manifest error: sample entry "
+                        + juce::String (sampleIndex + 1)
+                        + " has a missing/unsafe field or duplicate ID/alias.";
+                continue;
+            }
+            seenIds.add (id);
+            seenAliases.add (alias);
+            ++uniqueSamples;
+            const auto candidate = resolveLocalFile (sampleRoot, relativePath);
+            if (! candidate.isAChildOf (sampleRoot) || ! candidate.existsAsFile())
+                unavailableAliases.add (alias + " (missing)");
+            else
+            {
+                std::unique_ptr<juce::AudioFormatReader> candidateReader (
+                    formats.createReaderFor (candidate));
+                if (candidateReader == nullptr)
+                    unavailableAliases.add (alias + " (unsupported format)");
+                else
+                    ++availableSamples;
+            }
+        }
+        if (manifestValidationError.isEmpty() && uniqueSamples != 10)
+            manifestValidationError = "Manifest error: expected 10 curated Orchid sample entries; found "
+                                    + juce::String (uniqueSamples) + ".";
+        catalogStatus = manifestValidationError.isNotEmpty() ? manifestValidationError
+            : "Orchid catalog: " + juce::String (uniqueSamples) + " entries, "
+                + juce::String (availableSamples) + " files available.";
+        if (! unavailableAliases.isEmpty())
+            catalogStatus += " Unavailable: " + unavailableAliases.joinIntoString (", ") + ".";
+
+        const auto cleanEntry = findNamedEntry (manifestObject->getProperty (
+            juce::Identifier ("samples")), sampleId);
+        const auto manifestPath = readSamplePath (cleanEntry).replaceCharacter ('\\', '/');
+        if (manifestPath.isEmpty())
+        {
+            sampleLoadStatus = "Manifest error: entry 'clean_kick' is missing or has no relative path.";
             return;
         }
 
@@ -242,6 +539,21 @@ private:
                              + expectedSamplePath + "'.";
             return;
         }
+
+        Motif importedMotif;
+        juce::String motifError;
+        if (importMotif (manifest, sampleRoot, importedMotif, motifError))
+        {
+            motif = std::move (importedMotif);
+            const auto beatCount = static_cast<double> (motif.endTick) / motif.ticksPerQuarter;
+            motifStatus = motif.alias + ": " + juce::String (static_cast<int> (motif.notes.size()))
+                        + " notes · " + juce::String (beatCount, 0) + " beats · "
+                        + juce::String (beatCount / 4.0, 0) + " bars · "
+                        + juce::String (motif.tempoBpm, 0) + " BPM · " + motif.key
+                        + " (imported as editable motif; not arranged).";
+        }
+        else
+            motifStatus = motifError;
 
         const auto sampleFile = sampleRoot.getChildFile (manifestPath);
         if (! sampleFile.isAChildOf (sampleRoot))
@@ -256,8 +568,6 @@ private:
             return;
         }
 
-        juce::AudioFormatManager formats;
-        formats.registerBasicFormats();
         std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (sampleFile));
         if (reader == nullptr)
         {
@@ -500,11 +810,20 @@ private:
         const bool deviceFailed = audioError.load (std::memory_order_acquire);
         const bool isCurrentlyPlaying = isPlaying.load (std::memory_order_acquire);
         const bool overflowed = voiceLimitReached.exchange (false, std::memory_order_acq_rel);
+        const bool loadingFinished = loadFinished.load (std::memory_order_acquire);
+        const bool audioSetupDone = audioSetupFinished.load (std::memory_order_acquire);
 
-        playButton.setEnabled (sampleIsReady && deviceIsReady && ! deviceFailed);
+        playButton.setEnabled (loadingFinished && sampleIsReady && deviceIsReady && ! deviceFailed);
         stopButton.setEnabled (isCurrentlyPlaying || ! deviceIsReady);
 
-        juce::String status = sampleLoadStatus;
+        juce::String status = loadingFinished ? sampleLoadStatus : "Loading Orchid catalog, Clean kick, and New Flow MIDI...";
+        if (! loadingFinished)
+        {
+            catalogLabel.setText ("Loading curated sample files...", juce::dontSendNotification);
+            motifLabel.setText ("Loading New Flow motif...", juce::dontSendNotification);
+            statusLabel.setText (status, juce::dontSendNotification);
+            return;
+        }
         if (! sampleIsReady)
             status = sampleLoadStatus;
         else if (isCurrentlyPlaying)
@@ -514,9 +833,9 @@ private:
 
         if (deviceFailed)
             status += " Audio device error; check the selected output device.";
-        else if (! deviceIsReady)
+        else if (! audioSetupDone || ! deviceIsReady)
         {
-            if (deviceInitialisationError.isNotEmpty())
+            if (audioSetupDone && deviceInitialisationError.isNotEmpty())
                 status += " Audio device unavailable: " + deviceInitialisationError;
             else
                 status += " Audio device unavailable; connect an output device and relaunch.";
@@ -530,6 +849,8 @@ private:
             status += " Voice limit reached; one beat was skipped.";
 
         statusLabel.setText (status, juce::dontSendNotification);
+        catalogLabel.setText (catalogStatus, juce::dontSendNotification);
+        motifLabel.setText (motifStatus, juce::dontSendNotification);
     }
 
     juce::AudioDeviceManager audioDeviceManager;
@@ -537,13 +858,22 @@ private:
     juce::TextButton stopButton;
     juce::Label titleLabel;
     juce::Label sampleLabel;
+    juce::Label catalogLabel;
+    juce::Label motifLabel;
     juce::Label statusLabel;
+    juce::Label arrangementLabel;
+
+    licklubin::ArrangementModel arrangementModel;
+    std::unique_ptr<ArrangementGridComponent> arrangementGrid;
 
     juce::AudioBuffer<float> sampleData;
     int sampleLength = 0;
     double sampleRate = 0.0;
     juce::String sampleLoadStatus { "Loading clean_kick..." };
+    juce::String catalogStatus { "Orchid catalog is not loaded." };
+    juce::String motifStatus { "New Flow motif is not imported." };
     juce::String deviceInitialisationError;
+    Motif motif;
 
     std::array<Voice, maxVoices> voices {};
     double deviceSampleRate = 0.0;
@@ -558,6 +888,9 @@ private:
     std::atomic<bool> audioError { false };
     std::atomic<bool> isPlaying { false };
     std::atomic<bool> voiceLimitReached { false };
+    std::atomic<bool> audioSetupFinished { false };
+    std::atomic<bool> loadFinished { false };
+    std::thread loadWorker;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };
@@ -573,7 +906,7 @@ public:
         setUsingNativeTitleBar (true);
         setResizable (true, true);
         setContentOwned (new MainComponent(), true);
-        centreWithSize (520, 270);
+        centreWithSize (1100, 700);
         setVisible (true);
     }
 

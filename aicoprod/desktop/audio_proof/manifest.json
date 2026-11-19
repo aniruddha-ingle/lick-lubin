@@ -1,11 +1,24 @@
 {
   "samples": [
+    { "id": "perfect_donk", "alias": "Perfect Donk", "role": "bass", "relative_path": "808s & Basses/Cymatics - Orchid BASS Perfect Donk (C).wav", "root_note": "C" },
+    { "id": "heavyweight", "alias": "Heavyweight", "role": "808", "relative_path": "808s & Basses/Cymatics - Orchid 808 Heavyweight (C).wav", "root_note": "C" },
+    { "id": "clean_kick", "alias": "Clean", "role": "kick", "relative_path": "Drum One Shots/Cymatics - Orchid Kick - Clean (F).wav", "root_note": "F" },
+    { "id": "dancehall_kick", "alias": "Dancehall", "role": "kick", "relative_path": "Drum One Shots/Cymatics - Orchid Kick - Dancehall (A#).wav", "root_note": "A#" },
+    { "id": "bunker_rimshot", "alias": "Bunker", "role": "rimshot", "relative_path": "Drum One Shots/Cymatics - Orchid Rimshot - Bunker.wav" },
+    { "id": "roll_hihat", "alias": "Roll", "role": "hihat", "relative_path": "Drum One Shots/Cymatics - Orchid Hihat - Roll 1.wav" },
+    { "id": "closed_hihat", "alias": "Closed", "role": "hihat", "relative_path": "Drum One Shots/Cymatics - Orchid Hihat - Closed 1.wav" },
+    { "id": "open_hihat", "alias": "Open", "role": "hihat", "relative_path": "Drum One Shots/Cymatics - Orchid Hihat - Open 3.wav" },
+    { "id": "flam_clap", "alias": "Flam", "role": "clap", "relative_path": "Drum One Shots/Cymatics - Orchid Clap - Flam.wav" },
+    { "id": "pop_clap", "alias": "Pop", "role": "clap", "relative_path": "Drum One Shots/Cymatics - Orchid Clap - Pop.wav" }
+  ],
+  "motifs": [
     {
-      "id": "clean_kick",
-      "alias": "Clean",
-      "role": "kick",
-      "relative_path": "Drum One Shots/Cymatics - Orchid Kick - Clean (F).wav",
-      "root_note": "F"
+      "id": "new_flow",
+      "alias": "New Flow",
+      "relative_path": "Stems & MIDI/Melody Loop Stems and MIDI/Cymatics - New Flow - 102 BPM F Min/Cymatics - New Flow - 102 BPM F Min.mid",
+      "tempo_bpm": 102,
+      "key": "F minor",
+      "metadata_source": "filename"
     }
   ]
 }
