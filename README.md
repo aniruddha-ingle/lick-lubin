@@ -8,7 +8,7 @@
 
 ```text
 ┌─────────────────────────────┐   USB-C CDC (921,600 baud)   ┌──────────────────────────────────┐
-│     M5Stack CoreS3 (S3)     │ ◄═══ 0xAA LTV Framing ════► │   MacBook Pro (host_bridge.py)   │
+│     M5Stack CoreS3 (S3)     │ ◄═══ 0xAA LTV Framing ════►  │   MacBook Pro (host_bridge.py)   │
 │                             │  • 0x01: 24kHz Mic PCM16     │                                  │
 │ • Dual-MEMS Mic (24 kHz)    │  • 0x02: 24kHz Spk PCM16     │ • OpenAI Realtime WebSocket      │
 │ • Speaker + DMA Cutoff      │  • 0x03: JSON UI/PTT Events  │ • 7 Function-Calling Studio Tools│
