@@ -63,6 +63,11 @@ import Foundation
             RunLoop.main.run(until:Date().addingTimeInterval(0.04))
         }
         precondition(!s.running && visited==[49,50])
+        let oldName=s.headline
+        s.newProject()
+        s.project?.name=oldName
+        s.newProject()
+        precondition(s.archiveNames.filter{$0.hasPrefix(oldName)}.count >= 2)
         print("Passed the spoken producer story, loop independence, mixer routing, and project restore.")
     }
 }

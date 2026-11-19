@@ -31,6 +31,7 @@ struct BeatLoop: Codable, Identifiable {
     func hasTrack(_ track:Int,_ bar:Int) -> Bool { !pattern(track,bar).isEmpty }
 }
 struct Project:Codable {
+    var archiveID:UUID? = UUID()
     var name:String
     var loops:[BeatLoop] = [BeatLoop(id:1)]
     var slots:[Int?] = Array(repeating:nil,count:4)
@@ -122,13 +123,27 @@ enum Mode:String,CaseIterable { case steps="Track loop",song="Song loop",runway=
         let files=(try? FileManager.default.contentsOfDirectory(at:saveURL.deletingLastPathComponent(),includingPropertiesForKeys:nil)) ?? []
         return files.filter{$0.pathExtension=="json" && $0.lastPathComponent != saveURL.lastPathComponent}.map{$0.deletingPathExtension().lastPathComponent}.sorted()
     }
+    private func archive(_ p:Project) throws {
+        let folder=saveURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)
+        // Old projects may have no stable ID. Keep any unrelated or unreadable archive.
+        let safeName=p.name.replacingOccurrences(of:"/",with:"_")
+        var file=folder.appendingPathComponent(safeName+".json")
+        if FileManager.default.fileExists(atPath:file.path) {
+            let prior=(try? Data(contentsOf:file)).flatMap{try? JSONDecoder().decode(Project.self,from:$0)}
+            if prior?.archiveID == nil || prior?.archiveID != p.archiveID {
+                file=folder.appendingPathComponent(safeName+"-"+(p.archiveID ?? UUID()).uuidString+".json")
+            }
+        }
+        try JSONEncoder().encode(p).write(to:file,options:.atomic)
+    }
     func openArchive(_ name:String) {
         guard archiveNames.contains(name) else{return}
         do {
             let folder=saveURL.deletingLastPathComponent()
             let loaded=try JSONDecoder().decode(Project.self,from:Data(contentsOf:folder.appendingPathComponent(name+".json")))
             guard loaded.slots.count==4,loaded.mixes.count==names.count,let loop=loaded.loops.first else{return}
-            if let previous=project {try JSONEncoder().encode(previous).write(to:folder.appendingPathComponent(previous.name+".json"),options:.atomic)}
+            if let previous=project {try archive(previous)}
             stop();project=loaded;loopID=loop.id;bar=1;selectedSteps=[];syncMix();showHome=false
         }catch{message=error.localizedDescription}
     }
@@ -150,8 +165,7 @@ enum Mode:String,CaseIterable { case steps="Track loop",song="Song loop",runway=
         stop()
         // Keep the previous project available on disk when starting another.
         if let p=project {
-            let archive=saveURL.deletingLastPathComponent().appendingPathComponent(p.name + ".json")
-            do { try JSONEncoder().encode(p).write(to:archive,options:.atomic) }
+            do { try archive(p) }
             catch { message="Could not archive current project."; return }
         }
         let a=["toilet","waffle","pickle","velvet","disco","pocket"].randomElement()!
