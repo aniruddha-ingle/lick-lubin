@@ -107,7 +107,7 @@ python host_bridge.py
 
 <img width="1292" height="729" alt="image" src="https://github.com/user-attachments/assets/5c6d6824-ee63-4170-bfc7-8e0521a4e317" />
 
-<img width="1293" height="728" alt="image" src="https://github.com/user-attachments/assets/6e4697c9-0aa6-4bfc-991e-f228256eb253" />
+<img width="1292" height="726" alt="image" src="https://github.com/user-attachments/assets/f74ce372-bfbe-4d30-a10d-0e7205a0b48e" />
 
 <img width="1295" height="730" alt="image" src="https://github.com/user-attachments/assets/d4a7b681-e9d9-40d5-85f7-cc224cde9bc0" />
 
