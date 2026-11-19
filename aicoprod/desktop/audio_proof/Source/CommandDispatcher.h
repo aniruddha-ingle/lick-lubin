@@ -35,6 +35,7 @@ private:
         juce::StringArray allowed {"op", "command_id", "expected_revision"};
         if (op == "set_sidechain") allowed.addArray({"source_id", "target_id", "enabled"});
         else if (op == "set_reverb") allowed.addArray({"track_id", "mode"});
+        else if (op == "set_step") allowed.addArray({"track_id", "step", "enabled"});
         else if (op == "set_cell") allowed.addArray({"track_id", "bar", "enabled"});
         else if (op == "set_echo" || op == "set_cut_itself") allowed.addArray({"track_id", "enabled"});
         for (const auto& field : r.getDynamicObject()->getProperties())
@@ -58,7 +59,8 @@ private:
         if (!r["enabled"].isBool()) return "Expected a boolean enabled field.";
         if (op == "set_cut_itself" || op == "set_echo") return {};
         if (op == "set_cell" && r["bar"].isInt() && int(r["bar"]) >= 1 && int(r["bar"]) <= 16) return {};
-        return "Unknown command or invalid bar.";
+        if (op == "set_step" && r["step"].isInt() && int(r["step"]) >= 1 && int(r["step"]) <= 16) return {};
+        return "Unknown command or invalid bar or step.";
     }
     juce::var reply(bool ok, const juce::String& reason) const {
         auto* object = new juce::DynamicObject();
