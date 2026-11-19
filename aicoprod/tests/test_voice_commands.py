@@ -40,3 +40,51 @@ class VoiceCommands(unittest.TestCase):
         for rev in (-1, True, "1"):
             with self.assertRaises(ValueError):
                 parse_command("play", self.aliases, rev)
+
+    def test_track_effects_and_sidechain(self):
+        for phrase, fields in (
+            ("cut itself on for Perfect Donk", {"op": "set_cut_itself", "track_id": "perfect_donk", "enabled": True}),
+            ("echo off for Open", {"op": "set_echo", "track_id": "open_hihat", "enabled": False}),
+            ("room reverb on for Pop", {"op": "set_reverb", "track_id": "pop_clap", "mode": "room"}),
+            ("hall reverb on for Pop", {"op": "set_reverb", "track_id": "pop_clap", "mode": "hall"}),
+            ("reverb off for Pop", {"op": "set_reverb", "track_id": "pop_clap", "mode": "off"}),
+            ("side chain Clean to Heavyweight", {"op": "set_sidechain", "source_id": "clean_kick",
+                                                   "target_id": "heavyweight", "enabled": True}),
+            ("remove sidechain Clean to Heavyweight", {"op": "set_sidechain", "source_id": "clean_kick",
+                                                         "target_id": "heavyweight", "enabled": False}),
+        ):
+            self.assertEqual(self.parse(phrase), {**fields, "expected_revision": 3, "command_id": "demo-1"})
+        for phrase in ("sidechain Clean to Clean", "reverb on for Pop", "echo off for New Flow"):
+            with self.assertRaises(ValueError):
+                self.parse(phrase)
+
+    def test_cli_socket_revision_lookup_and_delivery(self):
+        import json
+        import socket
+        import subprocess
+        import tempfile
+        import threading
+
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp, socket.socket(socket.AF_UNIX) as server:
+            address = str(Path(tmp) / "control.sock")
+            server.bind(address)
+            server.listen()
+            server.settimeout(5)
+            received = []
+
+            def receive():
+                for revision in (7, 8):
+                    connection, _ = server.accept()
+                    with connection, connection.makefile("rb") as reader:
+                        received.append(json.loads(reader.readline()))
+                        connection.sendall((json.dumps({"accepted": True, "revision": revision}) + "\n").encode())
+
+            thread = threading.Thread(target=receive)
+            thread.start()
+            cli = Path(__file__).resolve().parents[1] / "voice_commands.py"
+            result = subprocess.run([sys.executable, str(cli), "echo on for Pop", "--socket", address],
+                                    check=True, capture_output=True, text=True, timeout=8)
+            thread.join(5)
+            self.assertEqual(json.loads(result.stdout), {"accepted": True, "revision": 8})
+            self.assertEqual(received[0]["op"], "status")
+            self.assertEqual(received[1]["expected_revision"], 7)

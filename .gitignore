@@ -19,3 +19,5 @@ __pycache__/
 # macOS & runtime artifacts
 .DS_Store
 AI_Drops/*.mid
+
+/aicoprod/orchid-dictate
