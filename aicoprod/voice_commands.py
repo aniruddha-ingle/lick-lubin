@@ -26,7 +26,7 @@ def load_aliases(path=MANIFEST):
 
 
 def parse_command(transcript, aliases, expected_revision, command_id=None):
-    """Bars in the wire format are numbered 1–16, as displayed in the grid."""
+    """Bars and steps in the wire format are numbered 1–16, as displayed in the grid."""
     if type(expected_revision) is not int or expected_revision < 0:
         raise ValueError("Expected revision must be a nonnegative integer.")
     if command_id is not None and (not isinstance(command_id, str) or not command_id.strip()):
@@ -65,18 +65,19 @@ def parse_command(transcript, aliases, expected_revision, command_id=None):
         return {**request, "op": "set_sidechain", "source_id": aliases[source], "target_id": aliases[target],
                 "enabled": not action.startswith("remove")}
 
-    match = re.fullmatch(r"(put|place|add) (.+) (?:in|on|at) bar (\w+)", text)
+    match = re.fullmatch(r"(put|place|add) (.+) (?:in|on|at) (bar|step) (\w+)", text)
     enabled = match is not None
     if not enabled:
-        match = re.fullmatch(r"(remove) (.+) from bar (\w+)", text)
+        match = re.fullmatch(r"(remove) (.+) from (bar|step) (\w+)", text)
     if not match:
-        raise ValueError("Use play, stop, put <sample> in bar <number>, or remove <sample> from bar <number>.")
-    _, alias, number = match.groups()
+        raise ValueError("Use play, stop, put <sample> on bar/step <number>, or remove <sample> from bar/step <number>.")
+    _, alias, unit, number = match.groups()
     if alias not in aliases:
         raise ValueError(f"Unknown sample alias: {alias}")
     if number not in BARS:
-        raise ValueError("Choose one bar from 1 to 16.")
-    return {**request, "op": "set_cell", "track_id": aliases[alias], "bar": BARS[number], "enabled": enabled}
+        raise ValueError(f"Choose one {unit} from 1 to 16.")
+    op = "set_step" if unit == "step" else "set_cell"
+    return {**request, "op": op, "track_id": aliases[alias], unit: BARS[number], "enabled": enabled}
 
 
 def deliver(command, socket_path):

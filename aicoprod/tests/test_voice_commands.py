@@ -27,6 +27,17 @@ class VoiceCommands(unittest.TestCase):
                         "op": "set_cell", "track_id": track, "bar": bar, "enabled": enabled,
                         "expected_revision": 3, "command_id": "demo-1"})
 
+    def test_step_edit(self):
+        for step, word in enumerate(BAR_WORDS, 1):
+            for phrase, enabled in ((f"put Clean on step {word}", True),
+                                    (f"remove Clean from step {step}", False)):
+                self.assertEqual(self.parse(phrase), {
+                    "op": "set_step", "track_id": "clean_kick", "step": step, "enabled": enabled,
+                    "expected_revision": 3, "command_id": "demo-1"})
+        for phrase in ("put Clean on step zero", "remove Clean from step 17", "put Clean on step 2 and 3"):
+            with self.assertRaises(ValueError):
+                self.parse(phrase)
+
     def test_reject_whole_ambiguous_or_invalid_request(self):
         for phrase in ("play and stop", "do not play", "put Clean and Pop in bar one",
                        "put Clean in bar 0", "remove Pop from bar 17", "put Snare in bar 2",
