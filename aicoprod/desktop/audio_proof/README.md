@@ -37,15 +37,13 @@ open "aicoprod/desktop/audio_proof/build/LickLubinAudioProof_artefacts/Release/L
 ```
 
 The 16-bar arrangement grid covers INTRO (4 bars), VERSE (8 bars), and CHORUS
-(4 bars). Clean starts enabled in bar 1. While stopped, click cells to choose
-which samples play in each bar. Play starts at bar 1 and triggers each active
-cell on all four beats of its bar at 102 BPM. The highlighted column follows
-playback, which stops automatically after bar 16.
+(4 bars). The intro opens with a four-bar groove. The upper grid chooses which tracks
+play in each bar. The 16-step editor below it sets the rhythm for the selected
+track across its enabled bars. Each step is a sixteenth note. For a backbeat,
+enable steps 5 and 13 on Pop. Edit while stopped, then press Play to hear the
+changes at 102 BPM. The highlighted column follows playback through bar 16.
 
-Select a track in **Track effects** to change its settings. **Cut itself**
-releases the track's previous hit when a new hit starts. **Echo** adds an
-eighth-note repeat. Select a room or hall reverb, or choose a sidechain source
-to lower this track's volume when the source plays.
+Select Heavyweight under **Track effects** and choose **Clean ducks Heavyweight** to lower the bass on kick hits. Cut Itself releases the selected track’s previous hit on retrigger. Echo adds tempo-synced eighth-note repeats, and the reverb menu offers room and hall presets. Effects can change while playing.
 
 The app loads the ten curated Orchid samples before playback and lists any
 unavailable tracks. It also imports the New Flow MIDI into an in-memory motif

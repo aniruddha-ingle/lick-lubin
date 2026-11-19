@@ -43,6 +43,12 @@ Image-Line documents FL Studio Cut Itself as sending an all-notes-off/release co
 
 For **Side Chain A to B**, implement **trigger-based ducking** in the MVP: a kick event on A drives a gain envelope on B with a short attack, configurable depth, and release. This is deterministic and avoids audio-envelope detection latency and lookahead. It is not a full compressor or dynamic EQ. Add true audio-envelope detection only if the musical requirement is to follow the rendered kick waveform rather than its trigger event.
 
+The hackathon build uses a fixed ducking preset: a 5 ms attack, 55% gain reduction, and 120 ms recovery. Each destination can select one trigger source. Adjustable depth and release remain follow-up controls.
+
+## Grid rhythm
+
+Each track has one editable 16-step pattern spanning a bar of 4/4. Enabling a bar plays that track’s pattern there. A step is one sixteenth note. The shipped intro uses a syncopated kick and a backbeat, with the curated Roll sample providing the fill. Voice and mouse edits share the same pattern state.
+
 ## Voice and Codex command path
 
 The default path must work without an OpenAI API key or Realtime API credits. Keep CoreS3 as the push-to-talk microphone: on PTT press/release it sends its existing event frames, and while held it streams microphone PCM over the existing USB serial framing to the Python host. The host buffers each utterance and runs a local speech-to-text engine on the laptop (for example, benchmark a small whisper.cpp or Vosk model for latency and recognition of the sample aliases). Audio stays local for transcription.

@@ -6,7 +6,7 @@ The working musical target is **102 BPM, F minor**. The selected library is the 
 
 ## Current status
 
-The standalone Mac app plays a programmable 16-bar grid at 102 BPM. Each active cell plays its Orchid sample on four quarter notes. Edit cells while stopped. During playback you can change Cut Itself, kick-triggered ducking, eighth-note echo, and room or hall reverb.
+The standalone Mac app plays a programmable 16-bar grid at 102 BPM. Each active bar plays the selected track’s 16-step rhythm. Click a track and edit its sixteenth notes while stopped. Steps 1, 5, 9, and 13 are the four beat starts. During playback you can change Cut Itself, kick-triggered ducking, eighth-note echo, and room or hall reverb.
 
 The current Python host bridge and CoreS3 firmware are retained as legacy voice-input work while the playback engine is replaced. The old FL Studio specifications have been removed from the working tree at the user's direction and remain in Git history.
 
@@ -50,6 +50,8 @@ python3 aicoprod/voice_commands.py "put Bunker in bar one" --socket
 python3 aicoprod/voice_commands.py "add echo to Bunker" --socket
 python3 aicoprod/voice_commands.py "play" --socket
 ```
+
+Try “remove Clean from step seven” to hear the kick without its pickup between beats two and three. Say “put Clean on step seven” to bring it back. Each edit applies to that track across its active bars.
 
 Other phrases include “cut itself on for Perfect Donk”, “sidechain Clean to Heavyweight”, “put Pop in a big room”, and “reverb off for Pop”. A sidechain is audible when the source triggers while the target is sounding. Cut Itself affects overlapping hits on the same track. Select Roll in the grid to use the recorded hat roll.
 
