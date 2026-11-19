@@ -1,0 +1,11 @@
+{
+  "samples": [
+    {
+      "id": "clean_kick",
+      "alias": "Clean",
+      "role": "kick",
+      "relative_path": "Drum One Shots/Cymatics - Orchid Kick - Clean (F).wav",
+      "root_note": "F"
+    }
+  ]
+}
