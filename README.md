@@ -6,7 +6,7 @@ The working musical target is **102 BPM, F minor**. The selected library is the 
 
 ## Current status
 
-The first implementation slice is a standalone JUCE audio proof: load the Orchid Clean kick, play it on a 102 BPM beat, and stop cleanly. It is intentionally independent of the CoreS3 and AI services. Voice control, the arrangement UI, and hardware integration come later.
+The standalone Mac app plays a programmable 16-bar grid at 102 BPM. Each active cell plays its Orchid sample on four quarter notes. Edit cells while stopped. During playback you can change Cut Itself, kick-triggered ducking, eighth-note echo, and room or hall reverb.
 
 The current Python host bridge and CoreS3 firmware are retained as legacy voice-input work while the playback engine is replaced. The old FL Studio specifications have been removed from the working tree at the user's direction and remain in Git history.
 
@@ -42,7 +42,25 @@ Set `ORCHID_SAMPLE_ROOT` to the local `Cymatics - Orchid - Sample Pack` folder. 
 
 ## Voice control without API credits
 
-The planned no-API route is CoreS3 push-to-talk audio, local speech-to-text, then either an explicitly authorized Codex app-server text turn or a fixed local phrase-to-command grammar. Codex app-server access is an early gate: it requires eligible ChatGPT plan access and its own Sign in with ChatGPT authorization; an existing Codex login does not automatically provide the app with credentials. Realtime API support remains optional and requires separate API access/credits.
+With the JUCE app open, run these commands from the repository root. Place both sounds in bar one to hear them together. Turn echo on and off during playback to compare the rimshot.
+
+```sh
+python3 aicoprod/voice_commands.py "put Clean in bar one" --socket
+python3 aicoprod/voice_commands.py "put Bunker in bar one" --socket
+python3 aicoprod/voice_commands.py "add echo to Bunker" --socket
+python3 aicoprod/voice_commands.py "play" --socket
+```
+
+Other phrases include “cut itself on for Perfect Donk”, “sidechain Clean to Heavyweight”, “put Pop in a big room”, and “reverb off for Pop”. A sidechain is audible when the source triggers while the target is sounding. Cut Itself affects overlapping hits on the same track. Select Roll in the grid to use the recorded hat roll.
+
+For a spoken command, build the Mac helper once and invoke the client for each phrase. Grant macOS microphone and speech recognition permission when prompted, then speak after the listening cue. This uses on-device English recognition on the default Mac input. The typed path above also works when on-device recognition is unavailable.
+
+```sh
+bash aicoprod/build_orchid_dictate.sh
+python3 aicoprod/voice_commands.py --mic --socket
+```
+
+JUCE owns the grid and serves a user-only Unix socket at `~/.lick-lubin/control.sock`. Each accepted edit advances a revision. The client reads the revision before sending a command and prints JUCE's acknowledgement. The CoreS3 bridge and optional Codex interpretation path are described in the design plan.
 
 ## Verification boundaries
 

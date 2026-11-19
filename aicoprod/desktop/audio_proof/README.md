@@ -36,11 +36,18 @@ export ORCHID_SAMPLE_ROOT="/path/to/Cymatics - Orchid - Sample Pack"
 open "aicoprod/desktop/audio_proof/build/LickLubinAudioProof_artefacts/Release/Lick-Lubin Audio Proof.app"
 ```
 
-The embedded manifest catalogs the ten curated Orchid aliases and New Flow MIDI
-metadata. The app still plays the Clean kick as the audio proof and imports the
-MIDI notes into an in-memory editable motif model; importing does not place the
-motif into an arrangement. A separate 16-bar grid holds editable one-bar clip
-cells for the ten aliases across INTRO (4 bars), VERSE (8 bars), and CHORUS (4
-bars). Grid edits currently change arrangement state only; they do not affect
-the Clean kick audio proof. Keep the sample pack and MIDI files outside the
-repository; only their manifest-relative paths are checked in.
+The 16-bar arrangement grid covers INTRO (4 bars), VERSE (8 bars), and CHORUS
+(4 bars). Clean starts enabled in bar 1. While stopped, click cells to choose
+which samples play in each bar. Play starts at bar 1 and triggers each active
+cell on all four beats of its bar at 102 BPM. The highlighted column follows
+playback, which stops automatically after bar 16.
+
+Select a track in **Track effects** to change its settings. **Cut itself**
+releases the track's previous hit when a new hit starts. **Echo** adds an
+eighth-note repeat. Select a room or hall reverb, or choose a sidechain source
+to lower this track's volume when the source plays.
+
+The app loads the ten curated Orchid samples before playback and lists any
+unavailable tracks. It also imports the New Flow MIDI into an in-memory motif
+without adding it to the grid. Keep the sample pack and MIDI files outside the
+repository; the manifest contains their relative paths.

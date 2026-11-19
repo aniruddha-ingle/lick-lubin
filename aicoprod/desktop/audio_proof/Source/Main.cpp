@@ -1,35 +1,41 @@
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_basics/juce_audio_basics.h>
-#include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_core/juce_core.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <BinaryData.h>
 #include "ArrangementModel.h"
+#include "ArrangementTransport.h"
+#include "CommandDispatcher.h"
+#include "CommandServer.h"
+#include "SampleBank.h"
+#include "TrackEffects.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
 #include <functional>
-#include <limits>
 #include <memory>
 #include <thread>
 #include <vector>
 
 namespace
 {
-constexpr double tempoBpm = 102.0;
-constexpr double stopReleaseSeconds = 0.012;
-constexpr float voiceGain = 0.25f;
-constexpr int maxVoices = 8;
-static_assert (std::atomic<bool>::is_always_lock_free,
-               "Audio/UI state flags must use lock-free atomics.");
+using licklubin::ArrangementModel;
+using licklubin::ArrangementTransport;
+using licklubin::ReverbMode;
+using licklubin::SampleBank;
+using licklubin::TrackEffects;
 
-const juce::String sampleId { "clean_kick" };
-const juce::String expectedSamplePath {
-    "Drum One Shots/Cymatics - Orchid Kick - Clean (F).wav"
-};
+constexpr double stopReleaseSeconds = 0.012;
+constexpr double retriggerReleaseSeconds = 0.010;
+constexpr float voiceGain = 0.25f;
+constexpr float sidechainDepth = 0.55f;
+constexpr int voicesPerTrack = 8;
+constexpr int cleanTrack = 2;
+static_assert (std::atomic<bool>::is_always_lock_free && std::atomic<int>::is_always_lock_free,
+               "Audio/UI state must use lock-free atomics.");
 
 juce::var findNamedEntry (const juce::var& collection, const juce::String& wantedId)
 {
@@ -205,12 +211,36 @@ bool importMotif (const juce::var& manifest, const juce::File& root,
 
 struct Voice
 {
-    bool active = false;
-    bool releasing = false;
+    const SampleBank::Sample* sample = nullptr;
     double sourcePosition = 0.0;
-    float releaseStartGain = 1.0f;
-    int releaseSamplesRemaining = 0;
-    int releaseSamplesTotal = 0;
+    double sourceStep = 0.0;
+    licklubin::VoiceRelease releaseRamp;
+
+    void release (int frames) noexcept
+    {
+        if (sample != nullptr)
+            releaseRamp.start (frames);
+    }
+};
+
+struct TrackSettings
+{
+    bool cutItself = true;
+    bool echo = false;
+    ReverbMode reverb = ReverbMode::off;
+    int sidechainSource = -1;
+
+    int packed() const noexcept
+    {
+        return static_cast<int> (cutItself) | (static_cast<int> (echo) << 1)
+               | (static_cast<int> (reverb) << 2) | ((sidechainSource + 1) << 4);
+    }
+
+    static TrackSettings unpack (int value) noexcept
+    {
+        return { (value & 1) != 0, (value & 2) != 0,
+                 static_cast<ReverbMode> ((value >> 2) & 3), (value >> 4) - 1 };
+    }
 };
 }
 
@@ -223,7 +253,16 @@ public:
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
     }
 
-    std::function<void (int, int, bool)> onToggle;
+    std::function<void (int, int)> onCellClicked;
+
+    void setPlayheadBar (int bar)
+    {
+        if (playheadBar != bar)
+        {
+            playheadBar = bar;
+            repaint();
+        }
+    }
 
     void paint (juce::Graphics& graphics) override
     {
@@ -254,7 +293,8 @@ public:
         {
             const auto x = labelWidth + static_cast<int> (std::lround (bar * cellWidth));
             const auto width = static_cast<int> (std::ceil (cellWidth));
-            graphics.setColour (juce::Colour::fromRGB (38, 43, 52));
+            graphics.setColour (bar == playheadBar ? juce::Colour::fromRGB (51, 101, 113)
+                                                   : juce::Colour::fromRGB (38, 43, 52));
             graphics.fillRect (x, barHeader.getY(), width, barHeader.getHeight());
             graphics.setColour (juce::Colours::lightgrey);
             graphics.drawText (juce::String (bar + 1), x, barHeader.getY(), width,
@@ -278,7 +318,8 @@ public:
                     ? juce::Colour::fromRGB (104, 178, 141)
                     : juce::Colour::fromRGB (49, 56, 67));
                 graphics.fillRoundedRectangle (cell.toFloat(), 3.0f);
-                graphics.setColour (juce::Colour::fromRGB (70, 78, 91));
+                graphics.setColour (bar == playheadBar ? juce::Colour::fromRGB (119, 201, 215)
+                                                       : juce::Colour::fromRGB (70, 78, 91));
                 graphics.drawRect (cell, 1);
             }
         }
@@ -296,16 +337,13 @@ public:
                              / licklubin::ArrangementModel::barCount;
         const auto track = (event.y - headerHeight) / trackHeight;
         const auto bar = static_cast<int> ((event.x - labelWidth) / cellWidth);
-        if (! model.toggleClip (track, bar))
-            return;
-
-        repaint();
-        if (onToggle != nullptr)
-            onToggle (track, bar, model.hasClip (track, bar));
+        if (onCellClicked != nullptr && ArrangementModel::isValidCell (track, bar))
+            onCellClicked (track, bar);
     }
 
 private:
     licklubin::ArrangementModel& model;
+    int playheadBar = -1;
 };
 
 class MainComponent final : public juce::Component,
@@ -320,7 +358,7 @@ public:
         titleLabel.setColour (juce::Label::textColourId, juce::Colours::white);
         addAndMakeVisible (titleLabel);
 
-        sampleLabel.setText ("clean_kick  |  102 BPM  |  quarter-note trigger",
+        sampleLabel.setText ("102 BPM  |  F minor  |  16 bars",
                              juce::dontSendNotification);
         sampleLabel.setColour (juce::Label::textColourId, juce::Colours::lightgrey);
         addAndMakeVisible (sampleLabel);
@@ -334,20 +372,18 @@ public:
 
         arrangementLabel.setColour (juce::Label::textColourId, juce::Colours::lightgrey);
         arrangementLabel.setMinimumHorizontalScale (0.75f);
-        arrangementLabel.setText ("Arrangement state only: grid edits do not affect audio-proof playback.",
+        arrangementLabel.setText ("Click a cell to play its sample on each beat of that bar.",
                                   juce::dontSendNotification);
         addAndMakeVisible (arrangementLabel);
 
+        arrangementModel.toggleClip (cleanTrack, 0);
         arrangementGrid = std::make_unique<ArrangementGridComponent> (arrangementModel);
-        arrangementGrid->onToggle = [this] (int track, int bar, bool enabled)
+        arrangementGrid->onCellClicked = [this] (int track, int bar)
         {
-            const auto alias = juce::String (
-                licklubin::ArrangementModel::tracks[static_cast<size_t> (track)].alias);
-            arrangementLabel.setText ("Arrangement state only: " + alias + " bar "
-                + juce::String (bar + 1) + (enabled ? " clip on" : " clip off")
-                + "; audio-proof playback unchanged.", juce::dontSendNotification);
+            setArrangementCell (track, bar, ! arrangementModel.hasClip (track, bar), true);
         };
         addAndMakeVisible (*arrangementGrid);
+        initialiseTrackControls();
 
         statusLabel.setJustificationType (juce::Justification::centredLeft);
         statusLabel.setMinimumHorizontalScale (0.75f);
@@ -355,21 +391,36 @@ public:
         addAndMakeVisible (statusLabel);
 
         playButton.setButtonText ("Play");
-        playButton.onClick = [this]
-        {
-            if (sampleReady.load (std::memory_order_acquire)
-                && audioReady.load (std::memory_order_acquire)
-                && ! audioError.load (std::memory_order_acquire))
-                playRequested.store (true, std::memory_order_release);
-        };
+        playButton.onClick = [this] { requestPlay(); };
         addAndMakeVisible (playButton);
 
         stopButton.setButtonText ("Stop");
-        stopButton.onClick = [this]
-        {
-            stopRequested.store (true, std::memory_order_release);
-        };
+        stopButton.onClick = [this] { requestStop(); };
         addAndMakeVisible (stopButton);
+
+        commandServer = std::make_unique<CommandServer> ([this] (const juce::var& request)
+        {
+            auto reply = commandDispatcher.dispatch (request, [this] (const juce::var& command)
+            {
+                return applyCommand (command);
+            });
+            if (request["op"].toString() == "status")
+            {
+                const auto bar = currentPlayhead.load (std::memory_order_acquire);
+                auto* status = reply.getDynamicObject();
+                status->setProperty ("playing", bar >= 0);
+                status->setProperty ("playhead_bar", bar + 1);
+                status->setProperty ("samples_ready",
+                    loadFinished.load (std::memory_order_acquire) && sampleBank != nullptr
+                        ? sampleBank->readyCount() : 0);
+            }
+            return reply;
+        });
+        if (! commandServer->start())
+        {
+            commandServer.reset();
+            commandServerUnavailable = true;
+        }
 
         setSize (1100, 700);
         startTimerHz (20);
@@ -377,7 +428,7 @@ public:
 
         loadWorker = std::thread ([this]
         {
-            loadCleanKickFromManifest();
+            loadOrchidAssets();
             deviceInitialisationError = audioDeviceManager.initialise (0, 2, nullptr, true);
             audioDeviceManager.addAudioCallback (this);
             audioSetupFinished.store (true, std::memory_order_release);
@@ -387,6 +438,7 @@ public:
 
     ~MainComponent() override
     {
+        commandServer.reset();
         stopTimer();
         if (loadWorker.joinable())
             loadWorker.join();
@@ -423,10 +475,223 @@ public:
         arrangementLabel.setBounds (area.removeFromTop (24));
         area.removeFromTop (6);
         arrangementGrid->setBounds (area.removeFromTop (298));
+        area.removeFromTop (12);
+        auto controls = area.removeFromTop (29);
+        trackEffectsLabel.setBounds (controls.removeFromLeft (105));
+        trackSelector.setBounds (controls.removeFromLeft (145));
+        controls.removeFromLeft (10);
+        cutButton.setBounds (controls.removeFromLeft (104));
+        echoButton.setBounds (controls.removeFromLeft (84));
+        reverbSelector.setBounds (controls.removeFromLeft (130));
+        controls.removeFromLeft (12);
+        sidechainSelector.setBounds (controls.removeFromLeft (220));
     }
 
 private:
-    void loadCleanKickFromManifest()
+    void initialiseTrackControls()
+    {
+        trackEffectsLabel.setText ("Track effects", juce::dontSendNotification);
+        cutButton.setButtonText ("Cut itself");
+        echoButton.setButtonText ("Echo");
+        reverbSelector.addItem ("Reverb off", 1);
+        reverbSelector.addItem ("Room reverb", 2);
+        reverbSelector.addItem ("Hall reverb", 3);
+        sidechainSelector.addItem ("Sidechain off", 1);
+        for (int track = 0; track < ArrangementModel::trackCount; ++track)
+        {
+            const auto index = static_cast<size_t> (track);
+            const auto alias = juce::String (ArrangementModel::tracks[index].alias);
+            trackSelector.addItem (alias, track + 1);
+            sidechainSelector.addItem ("Duck on " + alias, track + 2);
+            pendingSettings[index].store (trackSettings[index].packed(), std::memory_order_relaxed);
+        }
+
+        trackSelector.setSelectedId (cleanTrack + 1, juce::dontSendNotification);
+        trackSelector.onChange = [this] { refreshTrackControls(); };
+        cutButton.onClick = [this]
+        {
+            const auto track = selectedTrack();
+            auto settings = trackSettings[track];
+            settings.cutItself = cutButton.getToggleState();
+            setTrackSettings (track, settings, true);
+        };
+        echoButton.onClick = [this]
+        {
+            const auto track = selectedTrack();
+            auto settings = trackSettings[track];
+            settings.echo = echoButton.getToggleState();
+            setTrackSettings (track, settings, true);
+        };
+        reverbSelector.onChange = [this]
+        {
+            const auto track = selectedTrack();
+            auto settings = trackSettings[track];
+            settings.reverb = static_cast<ReverbMode> (reverbSelector.getSelectedId() - 1);
+            setTrackSettings (track, settings, true);
+        };
+        sidechainSelector.onChange = [this]
+        {
+            const auto track = selectedTrack();
+            auto settings = trackSettings[track];
+            settings.sidechainSource = sidechainSelector.getSelectedId() - 2;
+            setTrackSettings (track, settings, true);
+        };
+        addAndMakeVisible (trackEffectsLabel);
+        addAndMakeVisible (trackSelector);
+        addAndMakeVisible (cutButton);
+        addAndMakeVisible (echoButton);
+        addAndMakeVisible (reverbSelector);
+        addAndMakeVisible (sidechainSelector);
+        refreshTrackControls();
+    }
+
+    size_t selectedTrack() const noexcept
+    {
+        return static_cast<size_t> (trackSelector.getSelectedId() - 1);
+    }
+
+    void refreshTrackControls()
+    {
+        const auto selected = selectedTrack();
+        const auto settings = trackSettings[selected];
+        cutButton.setToggleState (settings.cutItself, juce::dontSendNotification);
+        echoButton.setToggleState (settings.echo, juce::dontSendNotification);
+        reverbSelector.setSelectedId (static_cast<int> (settings.reverb) + 1, juce::dontSendNotification);
+        for (int track = 0; track < ArrangementModel::trackCount; ++track)
+            sidechainSelector.setItemEnabled (track + 2, static_cast<size_t> (track) != selected);
+        sidechainSelector.setSelectedId (settings.sidechainSource + 2, juce::dontSendNotification);
+    }
+
+    void setTrackSettings (size_t track, TrackSettings settings, bool local)
+    {
+        const auto packed = settings.packed();
+        if (trackSettings[track].packed() == packed)
+            return;
+
+        trackSettings[track] = settings;
+        pendingSettings[track].store (packed, std::memory_order_release);
+        if (local)
+            commandDispatcher.localEdit();
+        if (track == selectedTrack())
+            refreshTrackControls();
+    }
+
+    bool playbackActive() const noexcept
+    {
+        return playRequested.load (std::memory_order_acquire)
+               || currentPlayhead.load (std::memory_order_acquire) >= 0;
+    }
+
+    juce::String requestPlay()
+    {
+        if (playbackActive())
+            return {};
+
+        if (! loadFinished.load (std::memory_order_acquire)
+            || ! sampleReady.load (std::memory_order_acquire)
+            || ! audioReady.load (std::memory_order_acquire)
+            || audioError.load (std::memory_order_acquire))
+            return "Playback needs a loaded Orchid sample and an active audio device.";
+
+        pendingArrangement = arrangementModel;
+        playRequested.store (true, std::memory_order_release);
+        refreshStatus();
+        return {};
+    }
+
+    void requestStop() noexcept
+    {
+        if (playbackActive())
+            stopRequested.store (true, std::memory_order_release);
+    }
+
+    juce::String setArrangementCell (int track, int bar, bool enabled, bool local)
+    {
+        if (! ArrangementModel::isValidCell (track, bar))
+            return "Invalid arrangement cell.";
+        if (playbackActive())
+            return "Stop playback to edit clips.";
+        if (arrangementModel.hasClip (track, bar) == enabled)
+            return {};
+
+        arrangementModel.toggleClip (track, bar);
+        if (local)
+            commandDispatcher.localEdit();
+
+        const auto alias = juce::String (ArrangementModel::tracks[static_cast<size_t> (track)].alias);
+        auto result = alias + " - Bar " + juce::String (bar + 1)
+                    + (enabled ? " - Clip on" : " - Clip off");
+        if (loadFinished.load (std::memory_order_acquire) && sampleBank != nullptr
+            && sampleBank->sampleForTrack (track) == nullptr)
+            result += " - " + sampleBank->errorForTrack (track);
+
+        wasPlaying = false;
+        arrangementLabel.setText (result, juce::dontSendNotification);
+        arrangementGrid->repaint();
+        return {};
+    }
+
+    static int findTrack (const juce::String& id)
+    {
+        for (int track = 0; track < ArrangementModel::trackCount; ++track)
+            if (id == ArrangementModel::tracks[static_cast<size_t> (track)].id)
+                return track;
+        return -1;
+    }
+
+    juce::String applyCommand (const juce::var& command)
+    {
+        const auto op = command["op"].toString();
+        if (op == "play")
+            return requestPlay();
+        if (op == "stop")
+        {
+            requestStop();
+            return {};
+        }
+
+        const bool enabled = static_cast<bool> (command["enabled"]);
+        if (op == "set_sidechain")
+        {
+            const auto source = findTrack (command["source_id"].toString());
+            const auto target = findTrack (command["target_id"].toString());
+            if (source < 0 || target < 0 || source == target)
+                return "Invalid sidechain route.";
+
+            const auto index = static_cast<size_t> (target);
+            auto settings = trackSettings[index];
+            if (enabled || settings.sidechainSource == source)
+                settings.sidechainSource = enabled ? source : -1;
+            setTrackSettings (index, settings, false);
+            return {};
+        }
+
+        const auto track = findTrack (command["track_id"].toString());
+        if (track < 0)
+            return "Unknown arrangement track.";
+        if (op == "set_cell")
+            return setArrangementCell (track, static_cast<int> (command["bar"]) - 1, enabled, false);
+
+        const auto index = static_cast<size_t> (track);
+        auto settings = trackSettings[index];
+        if (op == "set_cut_itself")
+            settings.cutItself = enabled;
+        else if (op == "set_echo")
+            settings.echo = enabled;
+        else if (op == "set_reverb")
+        {
+            const auto mode = command["mode"].toString();
+            settings.reverb = mode == "room" ? ReverbMode::room
+                            : mode == "hall" ? ReverbMode::hall : ReverbMode::off;
+        }
+        else
+            return "Unknown command.";
+
+        setTrackSettings (index, settings, false);
+        return {};
+    }
+
+    void loadOrchidAssets()
     {
         auto rootText = juce::SystemStats::getEnvironmentVariable (
             "ORCHID_SAMPLE_ROOT", {}).trim();
@@ -459,86 +724,21 @@ private:
             return;
         }
 
-        const auto* manifestObject = manifest.getDynamicObject();
-        auto* samples = manifestObject != nullptr
-                      ? manifestObject->getProperty (juce::Identifier ("samples")).getArray() : nullptr;
-        if (samples == nullptr)
-        {
-            sampleLoadStatus = "Manifest error: 'samples' must be an array.";
-            return;
-        }
-
-        juce::AudioFormatManager formats;
-        formats.registerBasicFormats();
-        int availableSamples = 0;
-        int uniqueSamples = 0;
+        sampleBank = std::make_unique<SampleBank> (manifest, sampleRoot);
         juce::StringArray unavailableAliases;
-        juce::String manifestValidationError;
-        juce::StringArray seenIds;
-        juce::StringArray seenAliases;
-        for (int sampleIndex = 0; sampleIndex < samples->size(); ++sampleIndex)
-        {
-            const auto& entry = samples->getReference (sampleIndex);
-            const auto* sample = entry.getDynamicObject();
-            if (sample == nullptr)
-            {
-                if (manifestValidationError.isEmpty())
-                    manifestValidationError = "Manifest error: sample entry "
-                                            + juce::String (sampleIndex + 1) + " must be an object.";
-                continue;
-            }
-            const auto id = sample->getProperty (juce::Identifier ("id")).toString();
-            const auto alias = sample->getProperty (juce::Identifier ("alias")).toString();
-            const auto relativePath = readSamplePath (entry).replaceCharacter ('\\', '/');
-            if (id.isEmpty() || alias.isEmpty() || ! isSafeRelativePath (relativePath)
-                || seenIds.contains (id) || seenAliases.contains (alias))
-            {
-                if (manifestValidationError.isEmpty())
-                    manifestValidationError = "Manifest error: sample entry "
-                        + juce::String (sampleIndex + 1)
-                        + " has a missing/unsafe field or duplicate ID/alias.";
-                continue;
-            }
-            seenIds.add (id);
-            seenAliases.add (alias);
-            ++uniqueSamples;
-            const auto candidate = resolveLocalFile (sampleRoot, relativePath);
-            if (! candidate.isAChildOf (sampleRoot) || ! candidate.existsAsFile())
-                unavailableAliases.add (alias + " (missing)");
-            else
-            {
-                std::unique_ptr<juce::AudioFormatReader> candidateReader (
-                    formats.createReaderFor (candidate));
-                if (candidateReader == nullptr)
-                    unavailableAliases.add (alias + " (unsupported format)");
-                else
-                    ++availableSamples;
-            }
-        }
-        if (manifestValidationError.isEmpty() && uniqueSamples != 10)
-            manifestValidationError = "Manifest error: expected 10 curated Orchid sample entries; found "
-                                    + juce::String (uniqueSamples) + ".";
-        catalogStatus = manifestValidationError.isNotEmpty() ? manifestValidationError
-            : "Orchid catalog: " + juce::String (uniqueSamples) + " entries, "
-                + juce::String (availableSamples) + " files available.";
+        for (int track = 0; track < ArrangementModel::trackCount; ++track)
+            if (sampleBank->sampleForTrack (track) == nullptr)
+                unavailableAliases.add (ArrangementModel::tracks[static_cast<size_t> (track)].alias);
+
+        const auto loadedCount = sampleBank->readyCount();
+        catalogStatus = "Orchid samples: " + juce::String (loadedCount) + " of "
+                      + juce::String (ArrangementModel::trackCount) + " loaded.";
         if (! unavailableAliases.isEmpty())
             catalogStatus += " Unavailable: " + unavailableAliases.joinIntoString (", ") + ".";
 
-        const auto cleanEntry = findNamedEntry (manifestObject->getProperty (
-            juce::Identifier ("samples")), sampleId);
-        const auto manifestPath = readSamplePath (cleanEntry).replaceCharacter ('\\', '/');
-        if (manifestPath.isEmpty())
-        {
-            sampleLoadStatus = "Manifest error: entry 'clean_kick' is missing or has no relative path.";
-            return;
-        }
-
-        if (manifestPath != expectedSamplePath)
-        {
-            sampleLoadStatus = "Manifest error: clean_kick must point to '"
-                             + expectedSamplePath + "'.";
-            return;
-        }
+        if (loadedCount == 0)
+            sampleLoadStatus = "No Orchid samples were loaded. " + sampleBank->errorForTrack (cleanTrack);
+        sampleReady.store (loadedCount > 0, std::memory_order_release);
 
         Motif importedMotif;
         juce::String motifError;
@@ -554,89 +754,42 @@ private:
         }
         else
             motifStatus = motifError;
-
-        const auto sampleFile = sampleRoot.getChildFile (manifestPath);
-        if (! sampleFile.isAChildOf (sampleRoot))
-        {
-            sampleLoadStatus = "Manifest error: clean_kick path must stay inside ORCHID_SAMPLE_ROOT.";
-            return;
-        }
-
-        if (! sampleFile.existsAsFile())
-        {
-            sampleLoadStatus = "WAV unavailable: " + sampleFile.getFullPathName();
-            return;
-        }
-
-        std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (sampleFile));
-        if (reader == nullptr)
-        {
-            sampleLoadStatus = "WAV error: JUCE could not read " + sampleFile.getFileName();
-            return;
-        }
-
-        if (reader->numChannels < 1 || reader->numChannels > 2
-            || reader->lengthInSamples <= 0
-            || reader->lengthInSamples > std::numeric_limits<int>::max()
-            || reader->sampleRate <= 0.0
-            || static_cast<double> (reader->lengthInSamples) / reader->sampleRate > 120.0)
-        {
-            sampleLoadStatus = "WAV error: clean_kick must be a non-empty mono/stereo WAV under 120 seconds.";
-            return;
-        }
-
-        sampleLength = static_cast<int> (reader->lengthInSamples);
-        sampleRate = reader->sampleRate;
-        sampleData.setSize (static_cast<int> (reader->numChannels), sampleLength,
-                            false, true, false);
-
-        const bool readOk = reader->read (&sampleData, 0, sampleLength, 0,
-                                          true, reader->numChannels > 1);
-        if (! readOk)
-        {
-            sampleData.setSize (0, 0);
-            sampleLength = 0;
-            sampleLoadStatus = "WAV error: failed to load the complete clean_kick sample.";
-            return;
-        }
-
-        sampleReady.store (true, std::memory_order_release);
-        sampleLoadStatus = "Loaded clean_kick fully into memory from "
-                         + sampleFile.getFullPathName();
     }
 
     void audioDeviceAboutToStart (juce::AudioIODevice* device) override
     {
         const auto rate = device != nullptr ? device->getCurrentSampleRate() : 0.0;
         deviceSampleRate = rate;
-        samplesPerBeat = rate > 0.0 ? rate * 60.0 / tempoBpm : 0.0;
-        samplesUntilNextBeat = 0.0;
-        transportRunning = false;
-
-        for (auto& voice : voices)
-            voice = {};
-
+        transport.stop();
+        voices = {};
+        appliedSettings.fill (-1);
+        for (auto& effect : trackEffects)
+        {
+            effect.prepare (rate);
+            effect.setTempo (ArrangementTransport::defaultTempoBpm);
+        }
+        currentPlayhead.store (-1, std::memory_order_release);
         stopRequested.store (false, std::memory_order_release);
         playRequested.store (false, std::memory_order_release);
         audioError.store (false, std::memory_order_release);
         audioReady.store (rate > 0.0, std::memory_order_release);
-        isPlaying.store (false, std::memory_order_release);
     }
 
     void audioDeviceStopped() override
     {
-        transportRunning = false;
+        audioReady.store (false, std::memory_order_release);
+        transport.stop();
+        currentPlayhead.store (-1, std::memory_order_release);
         playRequested.store (false, std::memory_order_release);
         stopRequested.store (true, std::memory_order_release);
-        isPlaying.store (false, std::memory_order_release);
-        audioReady.store (false, std::memory_order_release);
     }
 
     void audioDeviceError (const juce::String&) override
     {
         audioError.store (true, std::memory_order_release);
         audioReady.store (false, std::memory_order_release);
-        isPlaying.store (false, std::memory_order_release);
+        transport.stop();
+        currentPlayhead.store (-1, std::memory_order_release);
         playRequested.store (false, std::memory_order_release);
         stopRequested.store (true, std::memory_order_release);
     }
@@ -647,98 +800,82 @@ private:
                                            int numSamples,
                                            const juce::AudioIODeviceCallbackContext&) override
     {
+        const juce::ScopedNoDenormals noDenormals;
         for (int channel = 0; channel < numOutputChannels; ++channel)
         {
             if (outputChannelData[channel] != nullptr)
                 std::fill_n (outputChannelData[channel], numSamples, 0.0f);
         }
 
-        const bool stopNow = stopRequested.exchange (false, std::memory_order_acq_rel);
-        if (stopNow)
+        const bool canRender = audioReady.load (std::memory_order_acquire)
+                            && ! audioError.load (std::memory_order_acquire)
+                            && sampleReady.load (std::memory_order_acquire)
+                            && deviceSampleRate > 0.0;
+        const bool playPending = playRequested.load (std::memory_order_acquire);
+        if (stopRequested.exchange (false, std::memory_order_acq_rel) || ! canRender)
         {
-            playRequested.store (false, std::memory_order_release);
-            transportRunning = false;
-            samplesUntilNextBeat = 0.0;
+            transport.stop();
             releaseAllVoices();
-            isPlaying.store (false, std::memory_order_release);
         }
-        else if (playRequested.exchange (false, std::memory_order_acq_rel)
-                 && sampleReady.load (std::memory_order_acquire)
-                 && deviceSampleRate > 0.0)
+        else if (playPending)
         {
-            transportRunning = true;
-            samplesUntilNextBeat = 0.0;
-            isPlaying.store (true, std::memory_order_release);
+            playbackArrangement = pendingArrangement;
+            transport.start (deviceSampleRate);
         }
 
-        if (! audioReady.load (std::memory_order_acquire)
-            || audioError.load (std::memory_order_acquire)
-            || ! sampleReady.load (std::memory_order_acquire)
-            || deviceSampleRate <= 0.0
-            || sampleLength <= 0
-            || samplesPerBeat <= 0.0)
+        if (! canRender)
+        {
+            currentPlayhead.store (-1, std::memory_order_release);
+            if (playPending)
+                playRequested.store (false, std::memory_order_release);
             return;
+        }
 
-        const auto* const leftData = sampleData.getReadPointer (0);
-        const auto* const rightData = sampleData.getNumChannels() > 1
-                                      ? sampleData.getReadPointer (1)
-                                      : leftData;
-        const double sourceStep = sampleRate / deviceSampleRate;
-        const int lastSample = sampleLength - 1;
+        applyPendingSettings();
         for (int frame = 0; frame < numSamples; ++frame)
         {
-            if (transportRunning && samplesUntilNextBeat <= 0.0)
+            if (transport.isPlaying())
             {
-                startVoice();
-                samplesUntilNextBeat += samplesPerBeat;
+                const auto event = transport.advanceFrame (playbackArrangement);
+                if (event.trackMask != 0)
+                    triggerTracks (event.trackMask);
+                if (! transport.isPlaying())
+                    releaseAllVoices();
             }
 
             float mixedLeft = 0.0f;
             float mixedRight = 0.0f;
-
-            for (auto& voice : voices)
+            for (size_t track = 0; track < voices.size(); ++track)
             {
-                if (! voice.active)
-                    continue;
-
-                const int sourceIndex = static_cast<int> (voice.sourcePosition);
-                if (sourceIndex >= sampleLength)
+                float trackLeft = 0.0f;
+                float trackRight = 0.0f;
+                for (auto& voice : voices[track])
                 {
-                    voice.active = false;
-                    continue;
-                }
+                    if (voice.sample == nullptr)
+                        continue;
 
-                const int nextIndex = juce::jmin (sourceIndex + 1, lastSample);
-                const float fraction = static_cast<float> (voice.sourcePosition - sourceIndex);
-                const float sourceLeft = leftData[sourceIndex]
-                                       + (leftData[nextIndex] - leftData[sourceIndex]) * fraction;
-                const float sourceRight = rightData[sourceIndex]
-                                        + (rightData[nextIndex] - rightData[sourceIndex]) * fraction;
+                    const auto& buffer = voice.sample->buffer;
+                    const auto sampleLength = buffer.getNumSamples();
+                    const auto sourceIndex = static_cast<int> (voice.sourcePosition);
+                    const auto nextIndex = juce::jmin (sourceIndex + 1, sampleLength - 1);
+                    const auto fraction = static_cast<float> (voice.sourcePosition - sourceIndex);
+                    const auto* leftData = buffer.getReadPointer (0);
+                    const auto* rightData = buffer.getNumChannels() > 1 ? buffer.getReadPointer (1) : leftData;
+                    const auto left = leftData[sourceIndex]
+                                    + (leftData[nextIndex] - leftData[sourceIndex]) * fraction;
+                    const auto right = rightData[sourceIndex]
+                                     + (rightData[nextIndex] - rightData[sourceIndex]) * fraction;
 
-                float gain = voiceGain;
-                if (voice.releasing)
-                {
-                    const int denominator = juce::jmax (1, voice.releaseSamplesTotal - 1);
-                    const int numerator = juce::jmax (0, voice.releaseSamplesRemaining - 1);
-                    const float releaseProgress = static_cast<float> (numerator)
-                                                / static_cast<float> (denominator);
-                    gain *= voice.releaseStartGain * releaseProgress;
+                    const auto gain = voiceGain * voice.releaseRamp.nextGain();
+                    trackLeft += left * gain;
+                    trackRight += right * gain;
+                    voice.sourcePosition += voice.sourceStep;
+                    if (voice.sourcePosition >= sampleLength || voice.releaseRamp.finished())
+                        voice.sample = nullptr;
                 }
-
-                mixedLeft += sourceLeft * gain;
-                mixedRight += sourceRight * gain;
-                voice.sourcePosition += sourceStep;
-
-                if (voice.releasing)
-                {
-                    --voice.releaseSamplesRemaining;
-                    if (voice.releaseSamplesRemaining <= 0)
-                        voice.active = false;
-                }
-                else if (voice.sourcePosition >= sampleLength)
-                {
-                    voice.active = false;
-                }
+                trackEffects[track].process (trackLeft, trackRight);
+                mixedLeft += trackLeft;
+                mixedRight += trackRight;
             }
 
             if (numOutputChannels == 1 && outputChannelData[0] != nullptr)
@@ -751,51 +888,83 @@ private:
                 if (outputChannelData[1] != nullptr)
                     outputChannelData[1][frame] = juce::jlimit (-1.0f, 1.0f, mixedRight);
             }
+        }
 
-            if (transportRunning)
-                samplesUntilNextBeat -= 1.0;
+        currentPlayhead.store (transport.playheadBar(), std::memory_order_release);
+        if (playPending)
+            playRequested.store (false, std::memory_order_release);
+    }
+
+    void applyPendingSettings() noexcept
+    {
+        for (size_t track = 0; track < pendingSettings.size(); ++track)
+        {
+            const auto value = pendingSettings[track].load (std::memory_order_acquire);
+            if (appliedSettings[track] == value)
+                continue;
+
+            appliedSettings[track] = value;
+            const auto settings = TrackSettings::unpack (value);
+            audioTrackSettings[track] = settings;
+            auto& effect = trackEffects[track];
+            effect.setDelayBeats (settings.echo ? 0.5 : 0.0);
+            effect.setReverb (settings.reverb);
+            effect.setSidechainDepth (settings.sidechainSource >= 0 ? sidechainDepth : 0.0f);
         }
     }
 
-    void startVoice() noexcept
+    void triggerTracks (ArrangementTransport::TrackMask scheduled) noexcept
     {
-        for (auto& voice : voices)
+        ArrangementTransport::TrackMask started = 0;
+        for (int track = 0; track < ArrangementModel::trackCount; ++track)
+            if ((scheduled & (1u << track)) != 0 && startTrackVoice (track))
+                started |= static_cast<ArrangementTransport::TrackMask> (1u << track);
+
+        for (size_t target = 0; target < audioTrackSettings.size(); ++target)
         {
-            if (! voice.active)
-            {
-                voice.active = true;
-                voice.releasing = false;
-                voice.sourcePosition = 0.0;
-                voice.releaseStartGain = 1.0f;
-                voice.releaseSamplesRemaining = 0;
-                voice.releaseSamplesTotal = 0;
-                return;
-            }
+            const auto source = audioTrackSettings[target].sidechainSource;
+            if (source >= 0 && (started & (1u << source)) != 0)
+                trackEffects[target].triggerSidechain();
+        }
+    }
+
+    bool startTrackVoice (int track) noexcept
+    {
+        const auto* sample = sampleBank->sampleForTrack (track);
+        if (sample == nullptr)
+            return false;
+
+        const auto index = static_cast<size_t> (track);
+        auto& trackVoices = voices[index];
+        auto available = std::find_if (trackVoices.begin(), trackVoices.end(),
+                                      [] (const Voice& voice) { return voice.sample == nullptr; });
+        if (audioTrackSettings[index].cutItself)
+        {
+            const auto frames = releaseFrames (retriggerReleaseSeconds);
+            for (auto& voice : trackVoices)
+                voice.release (frames);
+        }
+        if (available == trackVoices.end())
+        {
+            voiceLimitReached.store (true, std::memory_order_release);
+            return false;
         }
 
-        voiceLimitReached.store (true, std::memory_order_release);
+        *available = { sample, 0.0, sample->sourceSampleRate / deviceSampleRate, {} };
+        return true;
+    }
+
+    int releaseFrames (double seconds) const noexcept
+    {
+        return juce::jmax (1, static_cast<int> (std::round (deviceSampleRate * seconds)));
     }
 
     void releaseAllVoices() noexcept
     {
-        const int releaseLength = deviceSampleRate > 0.0
-                                ? juce::jmax (1, static_cast<int> (
-                                      std::round (deviceSampleRate * stopReleaseSeconds)))
-                                : 1;
-
-        for (auto& voice : voices)
-        {
-            if (! voice.active)
-                continue;
-
-            if (! voice.releasing)
-            {
-                voice.releasing = true;
-                voice.releaseStartGain = 1.0f;
-                voice.releaseSamplesTotal = releaseLength;
-                voice.releaseSamplesRemaining = releaseLength;
-            }
-        }
+        const auto frames = releaseFrames (stopReleaseSeconds);
+        for (auto& trackVoices : voices)
+            for (auto& voice : trackVoices)
+                voice.release (frames);
     }
 
     void timerCallback() override
@@ -808,15 +977,25 @@ private:
         const bool sampleIsReady = sampleReady.load (std::memory_order_acquire);
         const bool deviceIsReady = audioReady.load (std::memory_order_acquire);
         const bool deviceFailed = audioError.load (std::memory_order_acquire);
-        const bool isCurrentlyPlaying = isPlaying.load (std::memory_order_acquire);
+        const bool playPending = playRequested.load (std::memory_order_acquire);
+        const int bar = currentPlayhead.load (std::memory_order_acquire);
+        const bool isCurrentlyPlaying = bar >= 0;
         const bool overflowed = voiceLimitReached.exchange (false, std::memory_order_acq_rel);
         const bool loadingFinished = loadFinished.load (std::memory_order_acquire);
         const bool audioSetupDone = audioSetupFinished.load (std::memory_order_acquire);
 
-        playButton.setEnabled (loadingFinished && sampleIsReady && deviceIsReady && ! deviceFailed);
-        stopButton.setEnabled (isCurrentlyPlaying || ! deviceIsReady);
+        playButton.setEnabled (loadingFinished && sampleIsReady && deviceIsReady && ! deviceFailed
+                               && ! isCurrentlyPlaying && ! playPending);
+        stopButton.setEnabled (isCurrentlyPlaying || playPending);
+        arrangementGrid->setPlayheadBar (bar);
+        if (isCurrentlyPlaying || playPending)
+            arrangementLabel.setText ("Stop playback to edit clips.", juce::dontSendNotification);
+        else if (wasPlaying)
+            arrangementLabel.setText ("Click a cell to play its sample on each beat of that bar.",
+                                      juce::dontSendNotification);
+        wasPlaying = isCurrentlyPlaying || playPending;
 
-        juce::String status = loadingFinished ? sampleLoadStatus : "Loading Orchid catalog, Clean kick, and New Flow MIDI...";
+        juce::String status = loadingFinished ? sampleLoadStatus : "Loading Orchid samples and New Flow MIDI...";
         if (! loadingFinished)
         {
             catalogLabel.setText ("Loading curated sample files...", juce::dontSendNotification);
@@ -827,9 +1006,9 @@ private:
         if (! sampleIsReady)
             status = sampleLoadStatus;
         else if (isCurrentlyPlaying)
-            status = "Playing clean_kick at 102 BPM.";
+            status = "Playing bar " + juce::String (bar + 1) + " of " + juce::String (ArrangementModel::barCount) + ".";
         else
-            status = "Sample ready. Press Play to begin; hits repeat every quarter note.";
+            status = "Press Play to hear the arrangement.";
 
         if (deviceFailed)
             status += " Audio device error; check the selected output device.";
@@ -847,6 +1026,8 @@ private:
 
         if (overflowed)
             status += " Voice limit reached; one beat was skipped.";
+        if (commandServerUnavailable)
+            status += " Local voice control is unavailable.";
 
         statusLabel.setText (status, juce::dontSendNotification);
         catalogLabel.setText (catalogStatus, juce::dontSendNotification);
@@ -862,31 +1043,44 @@ private:
     juce::Label motifLabel;
     juce::Label statusLabel;
     juce::Label arrangementLabel;
+    juce::Label trackEffectsLabel;
+    juce::ComboBox trackSelector;
+    juce::ToggleButton cutButton;
+    juce::ToggleButton echoButton;
+    juce::ComboBox reverbSelector;
+    juce::ComboBox sidechainSelector;
 
-    licklubin::ArrangementModel arrangementModel;
+    ArrangementModel arrangementModel;
+    ArrangementModel pendingArrangement; // Published by the UI using playRequested.
+    ArrangementModel playbackArrangement;
+    ArrangementTransport transport;
+    bool wasPlaying = false;
+    CommandDispatcher commandDispatcher;
+    std::unique_ptr<CommandServer> commandServer;
+    bool commandServerUnavailable = false;
     std::unique_ptr<ArrangementGridComponent> arrangementGrid;
 
-    juce::AudioBuffer<float> sampleData;
-    int sampleLength = 0;
-    double sampleRate = 0.0;
-    juce::String sampleLoadStatus { "Loading clean_kick..." };
+    std::unique_ptr<const SampleBank> sampleBank;
+    juce::String sampleLoadStatus;
     juce::String catalogStatus { "Orchid catalog is not loaded." };
     juce::String motifStatus { "New Flow motif is not imported." };
     juce::String deviceInitialisationError;
     Motif motif;
 
-    std::array<Voice, maxVoices> voices {};
+    std::array<std::array<Voice, voicesPerTrack>, ArrangementModel::trackCount> voices {};
+    std::array<TrackEffects, ArrangementModel::trackCount> trackEffects;
+    std::array<TrackSettings, ArrangementModel::trackCount> trackSettings;
+    std::array<std::atomic<int>, ArrangementModel::trackCount> pendingSettings;
+    std::array<int, ArrangementModel::trackCount> appliedSettings {};
+    std::array<TrackSettings, ArrangementModel::trackCount> audioTrackSettings;
     double deviceSampleRate = 0.0;
-    double samplesPerBeat = 0.0;
-    double samplesUntilNextBeat = 0.0;
-    bool transportRunning = false;
 
     std::atomic<bool> playRequested { false };
     std::atomic<bool> stopRequested { false };
     std::atomic<bool> sampleReady { false };
     std::atomic<bool> audioReady { false };
     std::atomic<bool> audioError { false };
-    std::atomic<bool> isPlaying { false };
+    std::atomic<int> currentPlayhead { -1 };
     std::atomic<bool> voiceLimitReached { false };
     std::atomic<bool> audioSetupFinished { false };
     std::atomic<bool> loadFinished { false };

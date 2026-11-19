@@ -44,6 +44,8 @@ class VoiceCommands(unittest.TestCase):
     def test_track_effects_and_sidechain(self):
         for phrase, fields in (
             ("cut itself on for Perfect Donk", {"op": "set_cut_itself", "track_id": "perfect_donk", "enabled": True}),
+            ("add echo to Bunker", {"op": "set_echo", "track_id": "bunker_rimshot", "enabled": True}),
+            ("put Pop in a big room", {"op": "set_reverb", "track_id": "pop_clap", "mode": "hall"}),
             ("echo off for Open", {"op": "set_echo", "track_id": "open_hihat", "enabled": False}),
             ("room reverb on for Pop", {"op": "set_reverb", "track_id": "pop_clap", "mode": "room"}),
             ("hall reverb on for Pop", {"op": "set_reverb", "track_id": "pop_clap", "mode": "hall"}),

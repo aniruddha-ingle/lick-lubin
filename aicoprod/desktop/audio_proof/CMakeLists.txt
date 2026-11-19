@@ -30,6 +30,8 @@ juce_add_gui_app(LickLubinAudioProof
 target_sources(LickLubinAudioProof
     PRIVATE
         Source/Main.cpp
+        Source/SampleBank.cpp
+        Source/TrackEffects.cpp
 )
 
 target_compile_features(LickLubinAudioProof PRIVATE cxx_std_17)
@@ -53,4 +55,23 @@ if (BUILD_TESTING)
     add_executable(ArrangementModelTests Tests/ArrangementModelTests.cpp)
     target_compile_features(ArrangementModelTests PRIVATE cxx_std_17)
     add_test(NAME ArrangementModelBehavior COMMAND ArrangementModelTests)
+
+    add_executable(ArrangementTransportTests Tests/ArrangementTransportTests.cpp)
+    target_compile_features(ArrangementTransportTests PRIVATE cxx_std_17)
+    add_test(NAME ArrangementTransportBehavior COMMAND ArrangementTransportTests)
+
+    add_executable(SampleBankTests Tests/SampleBankTests.cpp Source/SampleBank.cpp)
+    target_compile_features(SampleBankTests PRIVATE cxx_std_17)
+    target_link_libraries(SampleBankTests PRIVATE juce::juce_audio_formats OrchidManifestData)
+    add_test(NAME SampleBankBehavior COMMAND SampleBankTests)
+
+    add_executable(TrackEffectsTests Tests/TrackEffectsTests.cpp Source/TrackEffects.cpp)
+    target_compile_features(TrackEffectsTests PRIVATE cxx_std_17)
+    target_link_libraries(TrackEffectsTests PRIVATE juce::juce_audio_basics)
+    add_test(NAME TrackEffectsBehavior COMMAND TrackEffectsTests)
+
+    add_executable(CommandDispatcherTests Tests/CommandDispatcherTests.cpp)
+    target_compile_features(CommandDispatcherTests PRIVATE cxx_std_17)
+    target_link_libraries(CommandDispatcherTests PRIVATE juce::juce_core)
+    add_test(NAME CommandDispatcherBehavior COMMAND CommandDispatcherTests)
 endif()

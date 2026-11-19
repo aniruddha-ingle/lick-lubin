@@ -28,6 +28,7 @@ final class Dictation {
         guard let recognizer = recognizer, recognizer.isAvailable, recognizer.supportsOnDeviceRecognition else {
             fail("On-device English speech recognition is unavailable on this Mac.")
         }
+        request.contextualStrings = Array(CommandLine.arguments.dropFirst())
         request.requiresOnDeviceRecognition = true
         request.shouldReportPartialResults = false
         let input = engine.inputNode

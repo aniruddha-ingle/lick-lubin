@@ -36,6 +36,15 @@ def parse_command(transcript, aliases, expected_revision, command_id=None):
     if text in ("play", "stop"):
         return {**request, "op": text}
 
+    echo = re.fullmatch(r"(add echo to|remove echo from) (.+)", text)
+    room = re.fullmatch(r"put (.+) in (?:a|the) (big room|small room|hall|room)", text)
+    if echo:
+        state = "on" if echo[1].startswith("add") else "off"
+        text = f"echo {state} for {echo[2]}"
+    elif room:
+        preset = "hall" if room[2] in ("hall", "big room") else "room"
+        text = f"{preset} reverb on for {room[1]}"
+
     effect = re.fullmatch(r"(cut itself|echo|room reverb|hall reverb|reverb) (on|off) (?:for |on )?(.+)", text)
     if effect:
         name, state, alias = effect.groups()
@@ -97,12 +106,13 @@ def main():
     if args.mic == (args.transcript is not None):
         parser.error("Supply a transcript or --mic.")
     try:
+        aliases = load_aliases()
         transcript = args.transcript
         if args.mic:
             helper = Path(__file__).with_name("orchid-dictate")
             if not helper.is_file():
                 raise ValueError("Build the microphone helper with bash aicoprod/build_orchid_dictate.sh.")
-            transcript = subprocess.check_output([str(helper)], text=True).strip()
+            transcript = subprocess.check_output([str(helper), *aliases], text=True).strip()
         if args.mic:
             print("Heard " + transcript, file=sys.stderr)
         revision = args.expected_revision
@@ -113,7 +123,7 @@ def main():
             revision = snapshot["revision"]
         if revision is None:
             raise ValueError("Supply --expected-revision to preview a command without a socket.")
-        command = parse_command(transcript, load_aliases(), revision, args.command_id)
+        command = parse_command(transcript, aliases, revision, args.command_id)
         if args.socket:
             ack = deliver(command, args.socket)
             print(json.dumps(ack))
